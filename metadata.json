@@ -1,0 +1,10 @@
+{
+  "name": "Link Vault",
+  "description": "Save, organize, and categorize important links with cross-device cloud synchronization.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

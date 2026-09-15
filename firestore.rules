@@ -1,6 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // User vault data: private to authenticated owner
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
 
@@ -12,5 +13,16 @@ service cloud.firestore {
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
+
+    // Public shared bundles: allows clean short-URL and quick-code sharing of any number of links
+    match /shared_bundles/{bundleId} {
+      // Anyone with the link or quick-code can read the shared bundle
+      allow read: if true;
+      // Anyone can share links or categories; payload must be provided
+      allow create: if request.resource.data.payload != null;
+      // Shared bundles are immutable once created
+      allow update, delete: if false;
+    }
   }
 }
+

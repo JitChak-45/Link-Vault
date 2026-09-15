@@ -16,6 +16,10 @@ import {
   Share2,
   Lock,
   KeyRound,
+  ShieldCheck,
+  HelpCircle,
+  ChevronDown,
+  Sparkles,
 } from 'lucide-react';
 import {
   auth,
@@ -27,6 +31,10 @@ import {
   type User,
 } from '../firebase';
 import { SavedLink, Category } from '../types';
+import {
+  DEFAULT_SECURITY_QUESTIONS,
+  hashSecurityAnswer,
+} from '../utils/pinHelper';
 
 interface SyncModalProps {
   isOpen: boolean;
@@ -37,6 +45,8 @@ interface SyncModalProps {
   onImportLinks: (links: SavedLink[]) => Promise<void>;
   isSyncing: boolean;
   hasPinSet: boolean;
+  securityQuestion?: string | null;
+  onUpdateSecurityQuestion?: (question: string, answerHash: string) => Promise<void>;
   onLockNow: () => void;
   onChangePin: () => void;
   onRemovePin?: () => Promise<void>;
@@ -51,6 +61,8 @@ export const SyncModal: React.FC<SyncModalProps> = ({
   onImportLinks,
   isSyncing,
   hasPinSet,
+  securityQuestion,
+  onUpdateSecurityQuestion,
   onLockNow,
   onChangePin,
   onRemovePin,
@@ -63,6 +75,16 @@ export const SyncModal: React.FC<SyncModalProps> = ({
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
   const [importStatus, setImportStatus] = useState<string | null>(null);
+
+  // Security Question inline edit state
+  const [showEditSecurityQ, setShowEditSecurityQ] = useState(false);
+  const [selectedSecQ, setSelectedSecQ] = useState(securityQuestion || DEFAULT_SECURITY_QUESTIONS[0]);
+  const [customSecQ, setCustomSecQ] = useState('');
+  const [secAnswerInput, setSecAnswerInput] = useState('');
+  const [secSaving, setSecSaving] = useState(false);
+  const [secSuccess, setSecSuccess] = useState<string | null>(null);
+  const [secError, setSecError] = useState<string | null>(null);
+
 
   if (!isOpen) return null;
 
@@ -429,6 +451,8 @@ export const SyncModal: React.FC<SyncModalProps> = ({
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
               Vault Security & PIN Lock
             </h3>
+
+            {/* PIN Card */}
             <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-[#111B2E]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-cyan-400 flex items-center justify-center border border-blue-100 dark:border-blue-900/40 shrink-0">
@@ -497,6 +521,174 @@ export const SyncModal: React.FC<SyncModalProps> = ({
                 )}
               </div>
             </div>
+
+            {/* Security Question Card */}
+            {hasPinSet && (
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-[#111B2E]/40 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-cyan-50 dark:bg-cyan-950/60 text-cyan-600 dark:text-cyan-400 flex items-center justify-center border border-cyan-100 dark:border-cyan-900/40 shrink-0">
+                      <HelpCircle className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2 flex-wrap">
+                        <span>Recovery Security Question</span>
+                        {securityQuestion ? (
+                          <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/60">
+                            Configured
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800/60">
+                            Not Configured
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {securityQuestion
+                          ? `Q: "${securityQuestion}"`
+                          : 'Used to verify your identity before allowing a PIN reset'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    id="toggle-edit-sec-q-btn"
+                    onClick={() => {
+                      setShowEditSecurityQ((prev) => !prev);
+                      setSecError(null);
+                      setSecSuccess(null);
+                    }}
+                    className="self-start sm:self-auto px-2.5 py-1.5 bg-white dark:bg-[#070B14] border border-slate-300 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    {showEditSecurityQ ? 'Cancel' : securityQuestion ? 'Update Question' : 'Set Question'}
+                  </button>
+                </div>
+
+                {/* Inline edit security question form */}
+                {showEditSecurityQ && (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const effectiveQ =
+                        selectedSecQ === 'custom' ? customSecQ.trim() : selectedSecQ;
+                      if (!effectiveQ) {
+                        setSecError('Please choose or enter a security question.');
+                        return;
+                      }
+                      if (!secAnswerInput.trim()) {
+                        setSecError('Please enter an answer to your question.');
+                        return;
+                      }
+
+                      try {
+                        setSecSaving(true);
+                        setSecError(null);
+                        const answerHash = await hashSecurityAnswer(secAnswerInput);
+                        if (onUpdateSecurityQuestion) {
+                          await onUpdateSecurityQuestion(effectiveQ, answerHash);
+                        }
+                        setSecSuccess('Security question saved!');
+                        setTimeout(() => {
+                          setShowEditSecurityQ(false);
+                          setSecSuccess(null);
+                          setSecAnswerInput('');
+                        }, 1200);
+                      } catch (err: any) {
+                        setSecError('Failed to save: ' + err.message);
+                      } finally {
+                        setSecSaving(false);
+                      }
+                    }}
+                    className="pt-2 border-t border-slate-200/80 dark:border-slate-800 space-y-2.5 animate-in fade-in"
+                  >
+                    {secError && (
+                      <div className="p-2 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 rounded-lg">
+                        {secError}
+                      </div>
+                    )}
+                    {secSuccess && (
+                      <div className="p-2 text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 rounded-lg">
+                        {secSuccess}
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Select Question
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={selectedSecQ}
+                          onChange={(e) => setSelectedSecQ(e.target.value)}
+                          className="w-full px-3 py-1.5 rounded-lg bg-white dark:bg-[#070B14] border border-slate-300 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-200 appearance-none pr-8 cursor-pointer"
+                        >
+                          {DEFAULT_SECURITY_QUESTIONS.map((q) => (
+                            <option key={q} value={q}>
+                              {q}
+                            </option>
+                          ))}
+                          <option value="custom">Write custom question...</option>
+                        </select>
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-400 pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" />
+                      </div>
+                    </div>
+
+                    {selectedSecQ === 'custom' && (
+                      <div>
+                        <input
+                          type="text"
+                          placeholder="Your custom question..."
+                          value={customSecQ}
+                          onChange={(e) => setCustomSecQ(e.target.value)}
+                          className="w-full px-3 py-1.5 rounded-lg bg-white dark:bg-[#070B14] border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100"
+                        />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Your Secret Answer
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Type answer..."
+                        value={secAnswerInput}
+                        onChange={(e) => setSecAnswerInput(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-lg bg-white dark:bg-[#070B14] border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowEditSecurityQ(false)}
+                        className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 font-medium cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={secSaving || !secAnswerInput.trim()}
+                        className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50 transition-colors shadow-2xs cursor-pointer"
+                      >
+                        {secSaving ? 'Saving...' : 'Save Question'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+
+            {/* Tab Switch Auto-Lock Status Banner */}
+            {hasPinSet && (
+              <div className="p-3 rounded-xl border border-blue-100 dark:border-blue-900/40 bg-blue-50/50 dark:bg-blue-950/20 flex items-center gap-2.5 text-xs text-blue-800 dark:text-blue-300">
+                <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-cyan-400 shrink-0" />
+                <span>
+                  <strong>Tab Switch Auto-Lock is Active:</strong> Whenever you switch tabs or open a new window, LinkVault automatically prompts for your 6-digit PIN before showing links.
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Backup & Transfer */}

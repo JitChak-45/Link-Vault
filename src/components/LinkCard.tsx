@@ -66,6 +66,11 @@ export const LinkCard: React.FC<LinkCardProps> = ({
   const effectiveThumbnail = link.imageUrl || getDefaultThumbnailUrl(link.url);
   const hasThumbnail = Boolean(effectiveThumbnail && !thumbnailError);
   const isMac = typeof window !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+  const isMobile =
+    typeof window !== 'undefined' &&
+    (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 0 && window.innerWidth <= 768));
+  const isAndroid = typeof window !== 'undefined' && /Android/i.test(navigator.userAgent);
   const targetUrl = normalizeUrl(link.url);
 
   // Cleanup long press timer on unmount
@@ -196,16 +201,26 @@ export const LinkCard: React.FC<LinkCardProps> = ({
   };
 
   const handleOpenIncognito = (e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
+    if (e) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
     setShowOpenMenu(false);
     onOpen(link);
     try {
       navigator.clipboard.writeText(targetUrl);
+      if (typeof navigator.vibrate === 'function') {
+        navigator.vibrate(40);
+      }
     } catch (err) {
       console.warn('Clipboard copy failed:', err);
     }
-    setIncognitoNotice(true);
-    setTimeout(() => setIncognitoNotice(false), 6000);
+    if (isMobile && onOpenOptions) {
+      onOpenOptions(link);
+    } else {
+      setIncognitoNotice(true);
+      setTimeout(() => setIncognitoNotice(false), 7000);
+    }
   };
 
   const formatDate = (timestamp: number) => {
@@ -436,7 +451,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
               )}
             </button>
 
-            {/* Incognito Link (Right-click: Open link in incognito window) */}
+            {/* Incognito Link (Right-click: Open link in incognito window, or tap for launcher on mobile) */}
             <a
               href={targetUrl}
               target="_blank"
@@ -447,7 +462,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
               onTouchStart={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
               className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#111B2E] active:bg-slate-200 transition-colors cursor-pointer touch-manipulation active:scale-95"
-              title="Right-click & choose 'Open link in incognito window' (or click to copy & open)"
+              title={isMobile ? "Touch & hold for incognito menu, or tap for launch helper" : "Right-click & choose 'Open link in incognito window' (or click to copy & open)"}
             >
               <Shield className="w-4 h-4" />
             </a>
@@ -573,12 +588,26 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                   <Check className="w-3.5 h-3.5 shrink-0" />
                   <span>URL Copied to Clipboard!</span>
                 </div>
-                <p className="text-[11px] text-slate-200">
-                  <strong>Method 1:</strong> Right-click the shield icon or "Open" and select <span className="text-amber-300 font-medium">"Open link in incognito window"</span>.
-                </p>
-                <p className="text-[11px] text-slate-300">
-                  <strong>Method 2:</strong> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+Shift+N' : 'Ctrl+Shift+N'}</kbd> for Incognito, then paste (<kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+V' : 'Ctrl+V'}</kbd>).
-                </p>
+                {isMobile ? (
+                  <div className="space-y-0.5 text-[11px] text-slate-200">
+                    <p>
+                      <strong>Phone tip:</strong> Touch & hold the shield icon or link to choose{' '}
+                      <span className="text-cyan-300 font-medium">"Open in incognito tab"</span>.
+                    </p>
+                    <p className="text-slate-300">
+                      Or switch to your browser's Private tab and paste the copied link.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-[11px] text-slate-200">
+                      <strong>Method 1:</strong> Right-click the shield icon or "Open" and select <span className="text-amber-300 font-medium">"Open link in incognito window"</span>.
+                    </p>
+                    <p className="text-[11px] text-slate-300">
+                      <strong>Method 2:</strong> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+Shift+N' : 'Ctrl+Shift+N'}</kbd> for Incognito, then paste (<kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+V' : 'Ctrl+V'}</kbd>).
+                    </p>
+                  </>
+                )}
               </div>
               <button
                 type="button"
@@ -588,7 +617,20 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-end gap-2">
+            <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+              {onOpenOptions && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIncognitoNotice(false);
+                    onOpenOptions(link);
+                  }}
+                  className="text-[11px] font-semibold text-cyan-300 hover:text-cyan-200 underline inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <Shield className="w-3 h-3" />
+                  <span>Launch helper</span>
+                </button>
+              )}
               <a
                 href={targetUrl}
                 target="_blank"
@@ -597,7 +639,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                   onOpen(link);
                   setIncognitoNotice(false);
                 }}
-                className="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200 underline inline-flex items-center gap-1"
+                className="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200 underline inline-flex items-center gap-1 ml-auto"
               >
                 <span>Open in normal tab instead</span>
                 <ExternalLink className="w-3 h-3" />
@@ -1026,7 +1068,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
               )}
             </button>
 
-            {/* Incognito Link (Right-click: Open link in incognito window) */}
+            {/* Incognito Link (Right-click: Open link in incognito window, or tap for launcher on mobile) */}
             <a
               href={targetUrl}
               target="_blank"
@@ -1037,7 +1079,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
               onTouchStart={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
               className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#111B2E] active:bg-slate-200 transition-colors cursor-pointer touch-manipulation active:scale-95"
-              title="Right-click & choose 'Open link in incognito window' (or click to copy & open)"
+              title={isMobile ? "Touch & hold for incognito menu, or tap for launch helper" : "Right-click & choose 'Open link in incognito window' (or click to copy & open)"}
             >
               <Shield className="w-4 h-4" />
             </a>
@@ -1075,12 +1117,26 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                 <Check className="w-3.5 h-3.5 shrink-0" />
                 <span>URL Copied to Clipboard!</span>
               </div>
-              <p className="text-[11px] text-slate-200">
-                <strong>Method 1:</strong> Right-click the shield icon or "Open" and select <span className="text-amber-300 font-medium">"Open link in incognito window"</span>.
-              </p>
-              <p className="text-[11px] text-slate-300">
-                <strong>Method 2:</strong> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+Shift+N' : 'Ctrl+Shift+N'}</kbd> for Incognito, then paste (<kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+V' : 'Ctrl+V'}</kbd>).
-              </p>
+              {isMobile ? (
+                <div className="space-y-0.5 text-[11px] text-slate-200">
+                  <p>
+                    <strong>Phone tip:</strong> Touch & hold the shield icon or link to choose{' '}
+                    <span className="text-cyan-300 font-medium">"Open in incognito tab"</span>.
+                  </p>
+                  <p className="text-slate-300">
+                    Or switch to your browser's Private tab and paste the copied link.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <p className="text-[11px] text-slate-200">
+                    <strong>Method 1:</strong> Right-click the shield icon or "Open" and select <span className="text-amber-300 font-medium">"Open link in incognito window"</span>.
+                  </p>
+                  <p className="text-[11px] text-slate-300">
+                    <strong>Method 2:</strong> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+Shift+N' : 'Ctrl+Shift+N'}</kbd> for Incognito, then paste (<kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px] text-white">{isMac ? '⌘+V' : 'Ctrl+V'}</kbd>).
+                  </p>
+                </>
+              )}
             </div>
             <button
               type="button"
@@ -1090,7 +1146,20 @@ export const LinkCard: React.FC<LinkCardProps> = ({
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
-          <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-end gap-2">
+          <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+            {onOpenOptions && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIncognitoNotice(false);
+                  onOpenOptions(link);
+                }}
+                className="text-[11px] font-semibold text-cyan-300 hover:text-cyan-200 underline inline-flex items-center gap-1 cursor-pointer"
+              >
+                <Shield className="w-3 h-3" />
+                <span>Launch helper</span>
+              </button>
+            )}
             <a
               href={targetUrl}
               target="_blank"
@@ -1099,7 +1168,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                 onOpen(link);
                 setIncognitoNotice(false);
               }}
-              className="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200 underline inline-flex items-center gap-1"
+              className="text-[11px] font-semibold text-indigo-300 hover:text-indigo-200 underline inline-flex items-center gap-1 ml-auto"
             >
               <span>Open in normal tab instead</span>
               <ExternalLink className="w-3 h-3" />

@@ -147,23 +147,39 @@ export const LinkLongPressSheet: React.FC<LinkLongPressSheetProps> = ({
             </div>
           </button>
 
-          {/* 2. Open in Incognito */}
-          <button
-            type="button"
-            onClick={() => {
+          {/* 2. Open in Incognito Mode (Native Touch & Hold / Launch Helper) */}
+          <a
+            href={targetUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onTouchStart={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
               onClose();
-              onOpenIncognito();
+              if (onOpenOptions) {
+                onOpenOptions(link);
+              } else {
+                onOpenIncognito();
+              }
             }}
-            className="w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-[#111B2E] active:bg-slate-200 transition-colors text-left touch-manipulation group min-h-[50px]"
+            className="w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-slate-800 dark:text-slate-100 hover:bg-cyan-50/70 dark:hover:bg-cyan-950/30 active:bg-cyan-100 dark:active:bg-cyan-900/40 transition-colors text-left touch-manipulation group min-h-[50px] cursor-pointer"
+            title="Touch & hold to open native incognito menu, or tap for launch helper"
           >
-            <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-[#111B2E] text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0 group-hover:bg-slate-800 dark:group-hover:bg-slate-700 group-hover:text-white transition-colors">
+            <div className="w-9 h-9 rounded-xl bg-cyan-50 dark:bg-cyan-950/60 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0 group-hover:bg-cyan-600 group-hover:text-slate-950 transition-colors">
               <Shield className="w-4 h-4" />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Open in Incognito Mode</div>
-              <div className="text-xs text-slate-400 dark:text-slate-400 truncate">Auto-copies URL and provides private launch tips</div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">Open in Incognito Mode</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-100 dark:bg-cyan-950 text-cyan-800 dark:text-cyan-300 font-semibold border border-cyan-200 dark:border-cyan-800">
+                  Touch & Hold
+                </span>
+              </div>
+              <div className="text-xs text-slate-400 dark:text-slate-400 truncate">
+                Touch & hold for browser menu, or tap for phone launcher
+              </div>
             </div>
-          </button>
+          </a>
 
           {/* 3. Copy Link Address */}
           <button

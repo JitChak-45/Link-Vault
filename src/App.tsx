@@ -23,6 +23,7 @@ import {
   QrCode,
   Sun,
   Moon,
+  Loader2,
 } from 'lucide-react';
 import {
   auth,
@@ -34,6 +35,7 @@ import {
   updateDoc,
   deleteDoc,
   onSnapshot,
+  writeBatch,
   type User,
 } from './firebase';
 import { Category, SavedLink, SortOption, ViewMode, QrSharePayload } from './types';
@@ -45,7 +47,8 @@ import {
   getLocalLinks,
   saveLocalLinks,
 } from './utils/localVault';
-import { decodeShareData } from './utils/qrHelper';
+import { decodeShareData, decodeShareDataAsync, isLinkInCategory } from './utils/qrHelper';
+import { getFaviconUrl } from './utils/urlHelper';
 import { CategoryIcon } from './components/CategoryIcon';
 import { LinkCard } from './components/LinkCard';
 import { AddEditLinkModal } from './components/AddEditLinkModal';
@@ -100,6 +103,30 @@ export default function App() {
   const [isLocked, setIsLocked] = useState<boolean>(() => {
     return typeof window !== 'undefined' ? Boolean(localStorage.getItem('link_vault_pin_hash')) : false;
   });
+  const [isImportLoading, setIsImportLoading] = useState<boolean>(false);
+  const [securityQuestion, setSecurityQuestion] = useState<string | null>(() => {
+    return typeof window !== 'undefined' ? localStorage.getItem('link_vault_sec_question') : null;
+  });
+  const [securityAnswerHash, setSecurityAnswerHash] = useState<string | null>(() => {
+    return typeof window !== 'undefined' ? localStorage.getItem('link_vault_sec_answer_hash') : null;
+  });
+
+  // Auto-lock vault on tab switch or when mobile app is hidden/switched
+  useEffect(() => {
+    if (!hasPinSet) return;
+
+    const handleVisibilityChange = () => {
+      // Whenever the user switches away from the tab or minimizes the app, secure the vault
+      if (document.visibilityState === 'hidden') {
+        setIsLocked(true);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [hasPinSet]);
 
   // Futuristic Day / Night Theme: Auto-selects from local device time (6:00 AM - 5:59 PM: Light, 6:00 PM - 5:59 AM: Dark)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -134,18 +161,61 @@ export default function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // 1. Prevent unintended import modals on reload or if hash was left in the URL
+  // 1. Process share import links (URL hash, cloud short IDs, or search params like #s=..., #import=...)
   useEffect(() => {
-    if (
-      typeof window !== 'undefined' &&
-      (window.location.hash.includes('import') || window.location.search.includes('import'))
-    ) {
-      try {
-        window.history.replaceState(null, '', window.location.pathname);
-      } catch (err) {
-        console.warn('URL cleanup warning', err);
+    if (typeof window === 'undefined') return;
+
+    const checkAndProcessImportUrl = async () => {
+      const fullUrl = window.location.href;
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+
+      const hasShareIndicator =
+        fullUrl.includes('#s=') ||
+        fullUrl.includes('?s=') ||
+        fullUrl.includes('#share=') ||
+        fullUrl.includes('?share=') ||
+        fullUrl.includes('#import=') ||
+        fullUrl.includes('?import=') ||
+        fullUrl.includes('#i=') ||
+        fullUrl.includes('?i=') ||
+        fullUrl.includes('#code=') ||
+        fullUrl.includes('?code=') ||
+        hash.startsWith('#s_');
+
+      if (hasShareIndicator) {
+        setIsImportLoading(true);
+        const timeoutId = setTimeout(() => {
+          setIsImportLoading(false);
+        }, 4000);
+
+        try {
+          const decoded = (await decodeShareDataAsync(fullUrl)) || decodeShareData(fullUrl);
+          if (decoded) {
+            setImportPayload(decoded);
+            setIsImportModalOpen(true);
+            try {
+              window.history.replaceState(null, '', window.location.pathname);
+            } catch {
+              // ignore
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to parse URL import payload:', err);
+        } finally {
+          clearTimeout(timeoutId);
+          setIsImportLoading(false);
+        }
       }
-    }
+    };
+
+    checkAndProcessImportUrl();
+
+    // Also listen for hash changes if user pastes a hash in current window
+    window.addEventListener('hashchange', checkAndProcessImportUrl);
+    return () => {
+      window.removeEventListener('hashchange', checkAndProcessImportUrl);
+    };
   }, []);
 
   // 2. Authenticate user (Google / Email)
@@ -173,7 +243,7 @@ export default function App() {
     const categoriesColRef = collection(userDocRef, 'categories');
     const linksColRef = collection(userDocRef, 'links');
 
-    // User doc listener for synced PIN
+    // User doc listener for synced PIN and security question
     const unsubUserDoc = onSnapshot(userDocRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
@@ -185,6 +255,15 @@ export default function App() {
           setStoredPinHash(null);
           setHasPinSet(false);
           localStorage.removeItem('link_vault_pin_hash');
+        }
+
+        if (data?.securityQuestion) {
+          setSecurityQuestion(data.securityQuestion);
+          localStorage.setItem('link_vault_sec_question', data.securityQuestion);
+        }
+        if (data?.securityAnswerHash) {
+          setSecurityAnswerHash(data.securityAnswerHash);
+          localStorage.setItem('link_vault_sec_answer_hash', data.securityAnswerHash);
         }
       }
     });
@@ -256,18 +335,35 @@ export default function App() {
     if (editingLink) {
       const updatedList = links.map((l) =>
         l.id === editingLink.id
-          ? { ...l, ...linkData, updatedAt: Date.now() }
+          ? {
+              ...l,
+              ...linkData,
+              description: linkData.description || '',
+              imageUrl: linkData.imageUrl || '',
+              faviconUrl: linkData.faviconUrl || '',
+              updatedAt: Date.now(),
+            }
           : l
       );
       setLinks(updatedList);
       saveLocalLinks(updatedList);
 
       if (user) {
-        const linkRef = doc(db, 'users', user.uid, 'links', editingLink.id);
-        await updateDoc(linkRef, {
-          ...linkData,
-          updatedAt: Date.now(),
-        });
+        try {
+          const linkRef = doc(db, 'users', user.uid, 'links', editingLink.id);
+          await updateDoc(
+            linkRef,
+            cleanForFirestore({
+              ...linkData,
+              description: linkData.description || '',
+              imageUrl: linkData.imageUrl || '',
+              faviconUrl: linkData.faviconUrl || '',
+              updatedAt: Date.now(),
+            })
+          );
+        } catch (err) {
+          console.error('Failed to update link in Firestore:', err);
+        }
       }
     } else {
       const newId = user
@@ -275,6 +371,9 @@ export default function App() {
         : `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const newLink: SavedLink = {
         ...linkData,
+        description: linkData.description || '',
+        imageUrl: linkData.imageUrl || '',
+        faviconUrl: linkData.faviconUrl || '',
         id: newId,
         clickCount: 0,
         createdAt: Date.now(),
@@ -285,8 +384,12 @@ export default function App() {
       saveLocalLinks(updatedList);
 
       if (user) {
-        const newRef = doc(db, 'users', user.uid, 'links', newId);
-        await setDoc(newRef, newLink);
+        try {
+          const newRef = doc(db, 'users', user.uid, 'links', newId);
+          await setDoc(newRef, cleanForFirestore(newLink));
+        } catch (err) {
+          console.error('Failed to save new link in Firestore:', err);
+        }
       }
     }
     setEditingLink(null);
@@ -440,6 +543,21 @@ export default function App() {
     setIsOpenLinkModalOpen(true);
   };
 
+  // Helper to ensure objects written to Firestore never contain undefined values
+  const cleanForFirestore = <T extends Record<string, any>>(obj: T): T => {
+    const cleaned: any = {};
+    for (const [key, val] of Object.entries(obj)) {
+      if (val !== undefined) {
+        if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+          cleaned[key] = cleanForFirestore(val);
+        } else {
+          cleaned[key] = val;
+        }
+      }
+    }
+    return cleaned;
+  };
+
   // Handler for importing a shared category and its links
   const handleImportCategoryAndLinks = async (
     categoryData: {
@@ -463,22 +581,30 @@ export default function App() {
     setIsSyncing(true);
 
     // 1. Save or update category record (preserves private setting hideFromAll!)
-    const existingCat = categories.find((c) => c.slug === categoryData.slug);
-    let updatedCategories: Category[];
+    const safeSlug =
+      categoryData.slug ||
+      categoryData.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') ||
+      `cat-${Date.now()}`;
+
+    const existingCat = categories.find(
+      (c) => c.slug === safeSlug || isLinkInCategory(c.slug, { slug: safeSlug, name: categoryData.name })
+    );
+
     const categoryRecord: Category = {
-      id: categoryData.slug,
-      name: categoryData.name,
-      slug: categoryData.slug,
-      icon: categoryData.icon,
-      color: categoryData.color,
+      id: safeSlug,
+      name: categoryData.name || 'Shared Category',
+      slug: safeSlug,
+      icon: categoryData.icon || 'Bookmark',
+      color: categoryData.color || '#4f46e5',
       hideFromAll: Boolean(categoryData.hideFromAll),
-      description: categoryData.description,
+      description: categoryData.description || '',
       createdAt: existingCat?.createdAt || Date.now(),
     };
 
+    let updatedCategories: Category[];
     if (existingCat) {
       updatedCategories = categories.map((c) =>
-        c.slug === categoryData.slug ? categoryRecord : c
+        c.slug === existingCat.slug ? categoryRecord : c
       );
     } else {
       updatedCategories = [...categories, categoryRecord];
@@ -487,52 +613,95 @@ export default function App() {
     saveLocalCategories(updatedCategories);
 
     if (user) {
-      const catRef = doc(db, 'users', user.uid, 'categories', categoryData.slug);
-      await setDoc(catRef, categoryRecord);
-    }
-
-    // 2. Prepare imported links
-    const newSavedLinks: SavedLink[] = linksToImport.map((item, idx) => ({
-      id: `imported-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
-      title: item.title,
-      url: item.url,
-      categorySlug: categoryData.slug,
-      description: item.description,
-      tags: item.tags || [],
-      imageUrl: item.imageUrl,
-      faviconUrl: item.faviconUrl,
-      isFavorite: Boolean(item.isFavorite),
-      clickCount: 0,
-      createdAt: Date.now() + idx,
-      updatedAt: Date.now() + idx,
-    }));
-
-    // Avoid duplicate URLs already in vault
-    const existingUrls = new Set(links.map((l) => l.url.trim().toLowerCase()));
-    const nonDuplicates = newSavedLinks.filter(
-      (l) => !existingUrls.has(l.url.trim().toLowerCase())
-    );
-
-    const mergedLinks = [...nonDuplicates, ...links];
-    setLinks(mergedLinks);
-    saveLocalLinks(mergedLinks);
-
-    if (user) {
-      for (const l of nonDuplicates) {
-        const linkRef = doc(db, 'users', user.uid, 'links', l.id);
-        await setDoc(linkRef, l);
+      try {
+        const catRef = doc(db, 'users', user.uid, 'categories', categoryRecord.slug);
+        await setDoc(catRef, cleanForFirestore(categoryRecord));
+      } catch (err) {
+        console.error('Failed to sync imported category to Firestore:', err);
       }
     }
 
-    // Automatically navigate to this category so user sees all imported links right away!
-    setSelectedCategory(categoryData.slug);
-    setIsSyncing(false);
-    setImportSuccessMessage(
-      `Imported category "${categoryData.name}" with ${nonDuplicates.length} links! ${
-        categoryData.hideFromAll ? '(Saved as Private)' : ''
-      }`
+    // 2. Prepare imported links
+    // Check for duplicate URLs within THIS category using clean URL normalization
+    const existingInThisCategory = new Set(
+      links
+        .filter((l) => isLinkInCategory(l.categorySlug, categoryRecord))
+        .map((l) => (l.url || '').trim().toLowerCase().replace(/\/+$/, ''))
     );
-    setTimeout(() => setImportSuccessMessage(null), 6000);
+
+    const newSavedLinks: SavedLink[] = [];
+    const incomingLinks = Array.isArray(linksToImport) ? linksToImport : [];
+
+    incomingLinks.forEach((item, idx) => {
+      const rawUrl = (item.url || '').trim();
+      const normalizedUrl = rawUrl.toLowerCase().replace(/\/+$/, '');
+      if (rawUrl && !existingInThisCategory.has(normalizedUrl)) {
+        const newId = user
+          ? doc(collection(db, 'users', user.uid, 'links')).id
+          : `imported-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`;
+
+        newSavedLinks.push({
+          id: newId,
+          title: item.title || rawUrl,
+          url: rawUrl,
+          categorySlug: categoryRecord.slug,
+          description: item.description || '',
+          tags: Array.isArray(item.tags) ? item.tags : [],
+          imageUrl: item.imageUrl || '',
+          faviconUrl: item.faviconUrl || getFaviconUrl(rawUrl),
+          isFavorite: Boolean(item.isFavorite),
+          clickCount: 0,
+          createdAt: Date.now() + idx,
+          updatedAt: Date.now() + idx,
+        });
+        existingInThisCategory.add(normalizedUrl);
+      }
+    });
+
+    const mergedLinks = [...newSavedLinks, ...links];
+    setLinks(mergedLinks);
+    saveLocalLinks(mergedLinks);
+
+    if (user && newSavedLinks.length > 0) {
+      try {
+        // Use writeBatch for atomic and rapid syncing of large category links
+        const BATCH_SIZE = 400;
+        for (let i = 0; i < newSavedLinks.length; i += BATCH_SIZE) {
+          const chunk = newSavedLinks.slice(i, i + BATCH_SIZE);
+          const batch = writeBatch(db);
+          for (const l of chunk) {
+            const linkRef = doc(db, 'users', user.uid, 'links', l.id);
+            batch.set(linkRef, cleanForFirestore(l));
+          }
+          await batch.commit();
+        }
+      } catch (err) {
+        console.error('Failed to sync imported links to Firestore:', err);
+      }
+    }
+
+    // Automatically navigate to this category so user sees all imported links immediately!
+    setSelectedCategory(categoryRecord.slug);
+    setSearchQuery('');
+    setSelectedTag(null);
+    setIsSyncing(false);
+
+    if (newSavedLinks.length > 0) {
+      setImportSuccessMessage(
+        `Successfully saved "${categoryRecord.name}" with ${newSavedLinks.length} ${
+          newSavedLinks.length === 1 ? 'link' : 'links'
+        }! ${categoryRecord.hideFromAll ? '(Private category: visible in this tab)' : ''}`
+      );
+    } else if (incomingLinks.length > 0) {
+      setImportSuccessMessage(
+        `Category "${categoryRecord.name}" updated! All ${incomingLinks.length} links are already in this category.`
+      );
+    } else {
+      setImportSuccessMessage(
+        `Category folder "${categoryRecord.name}" saved to your vault!`
+      );
+    }
+    setTimeout(() => setImportSuccessMessage(null), 7000);
   };
 
   // Handler for importing an individual link
@@ -547,15 +716,20 @@ export default function App() {
     isFavorite?: boolean;
   }) => {
     setIsSyncing(true);
+    const rawUrl = (linkData.url || '').trim();
+    const newId = user
+      ? doc(collection(db, 'users', user.uid, 'links')).id
+      : `imported-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
     const newLink: SavedLink = {
-      id: `imported-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      title: linkData.title,
-      url: linkData.url,
-      categorySlug: linkData.categorySlug,
-      description: linkData.description,
-      tags: linkData.tags || [],
-      imageUrl: linkData.imageUrl,
-      faviconUrl: linkData.faviconUrl,
+      id: newId,
+      title: linkData.title || rawUrl,
+      url: rawUrl,
+      categorySlug: linkData.categorySlug || 'general',
+      description: linkData.description || '',
+      tags: Array.isArray(linkData.tags) ? linkData.tags : [],
+      imageUrl: linkData.imageUrl || '',
+      faviconUrl: linkData.faviconUrl || getFaviconUrl(rawUrl),
       isFavorite: Boolean(linkData.isFavorite),
       clickCount: 0,
       createdAt: Date.now(),
@@ -567,13 +741,19 @@ export default function App() {
     saveLocalLinks(updatedLinks);
 
     if (user) {
-      const linkRef = doc(db, 'users', user.uid, 'links', newLink.id);
-      await setDoc(linkRef, newLink);
+      try {
+        const linkRef = doc(db, 'users', user.uid, 'links', newLink.id);
+        await setDoc(linkRef, cleanForFirestore(newLink));
+      } catch (err) {
+        console.error('Failed to sync imported link to Firestore:', err);
+      }
     }
 
-    setSelectedCategory(linkData.categorySlug);
+    setSelectedCategory(newLink.categorySlug);
+    setSearchQuery('');
+    setSelectedTag(null);
     setIsSyncing(false);
-    setImportSuccessMessage(`Saved link "${linkData.title}" to your vault!`);
+    setImportSuccessMessage(`Saved link "${newLink.title}" to your vault!`);
     setTimeout(() => setImportSuccessMessage(null), 5000);
   };
 
@@ -600,11 +780,28 @@ export default function App() {
   };
 
   // PIN Protection Handlers
-  const handlePinConfigured = async (newPinHash: string) => {
+  const handlePinConfigured = async (
+    newPinHash: string,
+    newSecurityQuestion?: string,
+    newSecurityAnswerHash?: string
+  ) => {
     setStoredPinHash(newPinHash);
     setHasPinSet(true);
     setIsLocked(false);
     localStorage.setItem('link_vault_pin_hash', newPinHash);
+
+    const questionToSave = newSecurityQuestion || securityQuestion;
+    const answerHashToSave = newSecurityAnswerHash || securityAnswerHash;
+
+    if (newSecurityQuestion) {
+      setSecurityQuestion(newSecurityQuestion);
+      localStorage.setItem('link_vault_sec_question', newSecurityQuestion);
+    }
+    if (newSecurityAnswerHash) {
+      setSecurityAnswerHash(newSecurityAnswerHash);
+      localStorage.setItem('link_vault_sec_answer_hash', newSecurityAnswerHash);
+    }
+
     if (user) {
       await setDoc(
         doc(db, 'users', user.uid),
@@ -612,6 +809,30 @@ export default function App() {
           pinHash: newPinHash,
           pinEnabled: true,
           pinUpdatedAt: Date.now(),
+          ...(questionToSave ? { securityQuestion: questionToSave } : {}),
+          ...(answerHashToSave ? { securityAnswerHash: answerHashToSave } : {}),
+        },
+        { merge: true }
+      );
+    }
+  };
+
+  const handleUpdateSecurityQuestion = async (
+    question: string,
+    answerHash: string
+  ) => {
+    setSecurityQuestion(question);
+    setSecurityAnswerHash(answerHash);
+    localStorage.setItem('link_vault_sec_question', question);
+    localStorage.setItem('link_vault_sec_answer_hash', answerHash);
+
+    if (user) {
+      await setDoc(
+        doc(db, 'users', user.uid),
+        {
+          securityQuestion: question,
+          securityAnswerHash: answerHash,
+          securityUpdatedAt: Date.now(),
         },
         { merge: true }
       );
@@ -622,7 +843,11 @@ export default function App() {
     setStoredPinHash(null);
     setHasPinSet(false);
     setIsLocked(false);
+    setSecurityQuestion(null);
+    setSecurityAnswerHash(null);
     localStorage.removeItem('link_vault_pin_hash');
+    localStorage.removeItem('link_vault_sec_question');
+    localStorage.removeItem('link_vault_sec_answer_hash');
     if (user) {
       await setDoc(
         doc(db, 'users', user.uid),
@@ -630,6 +855,8 @@ export default function App() {
           pinHash: null,
           pinEnabled: false,
           pinUpdatedAt: Date.now(),
+          securityQuestion: null,
+          securityAnswerHash: null,
         },
         { merge: true }
       );
@@ -657,24 +884,28 @@ export default function App() {
   // Count of links belonging to private categories (hidden from All Links)
   const hiddenInAllCount = useMemo(() => {
     return links.filter((l) => {
-      const cat = categoryMap.get(l.categorySlug);
+      const cat = categoryMap.get(l.categorySlug) || categories.find((c) => isLinkInCategory(l.categorySlug, c));
       return Boolean(cat?.hideFromAll);
     }).length;
-  }, [links, categoryMap]);
+  }, [links, categoryMap, categories]);
 
   // Category counts
   const categoryCounts = useMemo(() => {
     const visibleInAll = links.filter((l) => {
-      const cat = categoryMap.get(l.categorySlug);
+      const cat = categoryMap.get(l.categorySlug) || categories.find((c) => isLinkInCategory(l.categorySlug, c));
       return !cat?.hideFromAll;
     }).length;
 
     const counts: Record<string, number> = {
       all: visibleInAll,
-      favorites: links.filter((l) => l.isFavorite).length,
+      favorites: links.filter((l) => {
+        const cat = categoryMap.get(l.categorySlug) || categories.find((c) => isLinkInCategory(l.categorySlug, c));
+        // Exclude private categories from the public Favorites list
+        return l.isFavorite && !cat?.hideFromAll;
+      }).length,
     };
     for (const cat of categories) {
-      counts[cat.slug] = links.filter((l) => l.categorySlug === cat.slug).length;
+      counts[cat.slug] = links.filter((l) => isLinkInCategory(l.categorySlug, cat)).length;
     }
     return counts;
   }, [links, categories, categoryMap]);
@@ -686,12 +917,16 @@ export default function App() {
         // Category filter
         if (selectedCategory === 'favorites') {
           if (!link.isFavorite) return false;
+          // Never show links from private categories in the public favorites view
+          const cat = categoryMap.get(link.categorySlug) || categories.find((c) => isLinkInCategory(link.categorySlug, c));
+          if (cat?.hideFromAll) return false;
         } else if (selectedCategory === 'all') {
           // Exclude links in private categories that are marked as hidden from All Links
-          const cat = categoryMap.get(link.categorySlug);
+          const cat = categoryMap.get(link.categorySlug) || categories.find((c) => isLinkInCategory(link.categorySlug, c));
           if (cat?.hideFromAll) return false;
         } else {
-          if (link.categorySlug !== selectedCategory) return false;
+          const activeCategory = categoryMap.get(selectedCategory) || categories.find((c) => isLinkInCategory(c.slug, { slug: selectedCategory }));
+          if (!isLinkInCategory(link.categorySlug, activeCategory || { slug: selectedCategory })) return false;
         }
 
         // Tag filter
@@ -723,9 +958,18 @@ export default function App() {
   }, [links, selectedCategory, selectedTag, searchQuery, sortBy, categoryMap]);
 
   return (
-    <div className="min-h-screen bg-[#F3F7FC] dark:bg-[#070B14] text-[#0F172A] dark:text-[#F1F5F9] flex flex-col font-sans antialiased selection:bg-cyan-500/20 selection:text-cyan-700 dark:selection:text-cyan-300 transition-colors duration-300 relative overflow-x-hidden">
-      {/* Subtle Futuristic Ambient Glow (CSS only, high performance) */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
+    <div
+      className="min-h-screen bg-[#F3F7FC] dark:bg-[#070B14] text-[#0F172A] dark:text-[#F1F5F9] flex flex-col font-sans antialiased selection:bg-cyan-500/20 selection:text-cyan-700 dark:selection:text-cyan-300 transition-colors duration-300 relative overflow-x-hidden"
+    >
+      {/* Main Vault Content (blurred & non-interactive only when PIN locked) */}
+      <div
+        id="vault-main-content"
+        className={`flex flex-col flex-1 transition-all duration-300 ${
+          hasPinSet && isLocked ? 'filter blur-xl opacity-30 select-none pointer-events-none' : ''
+        }`}
+      >
+        {/* Subtle Futuristic Ambient Glow (CSS only, high performance) */}
+        <div className="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
         <div className="absolute -top-40 -left-40 w-96 h-96 rounded-full bg-cyan-400/5 dark:bg-cyan-500/10 blur-3xl pointer-events-none" />
         <div className="absolute top-1/4 -right-40 w-96 h-96 rounded-full bg-indigo-500/5 dark:bg-indigo-500/10 blur-3xl pointer-events-none" />
         <div className="absolute -bottom-40 left-1/3 w-96 h-96 rounded-full bg-blue-500/5 dark:bg-blue-500/8 blur-3xl pointer-events-none" />
@@ -1395,6 +1639,7 @@ export default function App() {
           </p>
         </div>
       </footer>
+      </div>
 
       {/* Delete Confirmation Modal */}
       {deleteConfirmationId && (
@@ -1479,6 +1724,8 @@ export default function App() {
         onImportLinks={handleImportLinks}
         isSyncing={isSyncing}
         hasPinSet={hasPinSet}
+        securityQuestion={securityQuestion}
+        onUpdateSecurityQuestion={handleUpdateSecurityQuestion}
         onLockNow={handleLockVault}
         onChangePin={handleChangePin}
         onRemovePin={handleResetPin}
@@ -1489,20 +1736,28 @@ export default function App() {
         isLocked={isLocked}
         hasPinSet={hasPinSet}
         storedPinHash={storedPinHash}
-        onUnlock={() => setIsLocked(false)}
+        securityQuestion={securityQuestion}
+        securityAnswerHash={securityAnswerHash}
+        onUnlock={() => {
+          setIsLocked(false);
+        }}
         onPinConfigured={handlePinConfigured}
         onResetPin={handleResetPin}
-        onCancelSetup={() => setIsLocked(false)}
+        onCancelSetup={() => {
+          setIsLocked(false);
+        }}
       />
 
       {/* Open in Normal Tab vs Incognito Tab Modal */}
       <OpenLinkModal
         isOpen={isOpenLinkModalOpen}
         link={linkToOpen}
+        category={linkToOpen ? categoryMap.get(linkToOpen.categorySlug) : undefined}
         onClose={() => {
           setIsOpenLinkModalOpen(false);
           setLinkToOpen(null);
         }}
+        onOpenNormal={(link) => handleOpenLink(link)}
         onLinkOpened={(link) => handleOpenLink(link)}
       />
 
@@ -1512,10 +1767,12 @@ export default function App() {
         category={qrShareCategory}
         categoryLinks={
           qrShareCategory
-            ? links.filter((l) => l.categorySlug === qrShareCategory.slug)
+            ? links.filter((l) => isLinkInCategory(l.categorySlug, qrShareCategory))
             : []
         }
+        links={links}
         singleLink={qrShareLink}
+        link={qrShareLink}
         onClose={() => {
           setIsQrShareModalOpen(false);
           setQrShareCategory(null);
@@ -1565,6 +1822,26 @@ export default function App() {
           >
             <X className="w-4 h-4" />
           </button>
+        </div>
+      )}
+
+      {/* Cloud Bundle Fetching Loading Overlay */}
+      {isImportLoading && (
+        <div
+          id="import-cloud-loading-overlay"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white dark:bg-[#0D1422] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xl flex flex-col items-center gap-3 text-center max-w-xs">
+            <Loader2 className="w-8 h-8 text-blue-600 dark:text-cyan-400 animate-spin" />
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                Retrieving Shared Vault
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Connecting to cloud bundle & loading all links...
+              </p>
+            </div>
+          </div>
         </div>
       )}
     </div>

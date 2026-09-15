@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   X,
   QrCode,
@@ -10,6 +10,10 @@ import {
   ExternalLink,
   Layers,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
+  AlertTriangle,
+  Zap,
 } from 'lucide-react';
 import { Category, SavedLink, QrSharePayload } from '../types';
 import { CategoryIcon } from './CategoryIcon';
@@ -17,8 +21,11 @@ import {
   generateCategoryQrPayload,
   generateLinkQrPayload,
   generateShareUrl,
+  encodeShareDataAsync,
   generateQrDataUrl,
   downloadQrCode,
+  isLinkInCategory,
+  createCloudShareBundle,
 } from '../utils/qrHelper';
 
 interface QrShareModalProps {
@@ -26,7 +33,9 @@ interface QrShareModalProps {
   onClose: () => void;
   // Either share a category + links OR an individual link
   category?: Category | null;
+  categoryLinks?: SavedLink[];
   links?: SavedLink[];
+  singleLink?: SavedLink | null;
   link?: SavedLink | null;
 }
 
@@ -34,44 +43,111 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
   isOpen,
   onClose,
   category,
+  categoryLinks: propCategoryLinks,
   links = [],
-  link,
+  singleLink,
+  link: propLink,
 }) => {
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [shareUrl, setShareUrl] = useState<string>('');
+  const [quickCode, setQuickCode] = useState<string>('');
   const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showLinksPreview, setShowLinksPreview] = useState<boolean>(false);
 
-  const isCategory = Boolean(category && !link);
-  const categoryLinks = isCategory && category ? links.filter((l) => l.categorySlug === category.slug) : [];
-  const isPrivate = isCategory ? Boolean(category?.hideFromAll) : Boolean(category?.hideFromAll);
+  const activeLink = propLink || singleLink || null;
+  const isCategory = Boolean(category && !activeLink);
+
+  // Compute category links: find all matching links from links array or propCategoryLinks
+  const resolvedCategoryLinks = useMemo(() => {
+    if (!isCategory || !category) return [];
+    // 1. Gather all links from global links that match this category
+    const matchedFromGlobal = links.filter((l) => isLinkInCategory(l.categorySlug, category));
+    if (matchedFromGlobal.length > 0) {
+      return matchedFromGlobal;
+    }
+    // 2. Fallback to passed propCategoryLinks if provided
+    if (propCategoryLinks && propCategoryLinks.length > 0) {
+      return propCategoryLinks;
+    }
+    return [];
+  }, [isCategory, category, propCategoryLinks, links]);
+
+  const isPrivate = Boolean(category?.hideFromAll);
 
   useEffect(() => {
     if (!isOpen) return;
 
-    let payload: QrSharePayload | null = null;
-    if (isCategory && category) {
-      payload = generateCategoryQrPayload(category, links);
-    } else if (link) {
-      payload = generateLinkQrPayload(link, category || undefined);
+    let isMounted = true;
+    // CRITICAL: Immediately clear stale QR code, link, and quick code so previous category state is NEVER replicated
+    setQrDataUrl('');
+    setShareUrl('');
+    setQuickCode('');
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    async function generate() {
+      try {
+        let payload: QrSharePayload | null = null;
+        if (isCategory && category) {
+          payload = generateCategoryQrPayload(category, resolvedCategoryLinks);
+        } else if (activeLink) {
+          payload = generateLinkQrPayload(activeLink, category || undefined);
+        }
+
+        if (!payload) {
+          if (isMounted) {
+            setIsLoading(false);
+            setErrorMessage('No category or link selected to share.');
+          }
+          return;
+        }
+
+        // 1. Try creating cloud share bundle for ultra-short, never-truncated URL + 6-digit Quick Code
+        try {
+          const cloudResult = await createCloudShareBundle(payload);
+          if (!isMounted) return;
+          setShareUrl(cloudResult.shareUrl);
+          setQuickCode(cloudResult.shortCode);
+
+          // Instant high-res QR code generation (short URL will never fail)
+          const dataUrl = await generateQrDataUrl(cloudResult.shareUrl);
+          if (!isMounted) return;
+          setQrDataUrl(dataUrl);
+          setIsLoading(false);
+        } catch (cloudErr) {
+          console.warn('Cloud share bundle upload fallback:', cloudErr);
+          // Fallback: local compact encoding
+          const token = await encodeShareDataAsync(payload);
+          const url = generateShareUrl(payload, token);
+          if (!isMounted) return;
+          setShareUrl(url);
+
+          const dataUrl = await generateQrDataUrl(url);
+          if (!isMounted) return;
+          setQrDataUrl(dataUrl);
+          setIsLoading(false);
+        }
+      } catch (err) {
+        console.error('QR code generation failed:', err);
+        if (!isMounted) return;
+        setIsLoading(false);
+        setErrorMessage(
+          err instanceof Error
+            ? err.message
+            : 'Failed to generate QR code. You can still use the Copy Link button below.'
+        );
+      }
     }
 
-    if (!payload) return;
+    generate();
 
-    setIsLoading(true);
-    const url = generateShareUrl(payload);
-    setShareUrl(url);
-
-    generateQrDataUrl(url)
-      .then((dataUrl) => {
-        setQrDataUrl(dataUrl);
-        setIsLoading(false);
-      })
-      .catch((err) => {
-        console.error('QR code generation failed:', err);
-        setIsLoading(false);
-      });
-  }, [isOpen, category, links, link, isCategory]);
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, category?.id, category?.slug, category?.name, activeLink?.id, activeLink?.url, resolvedCategoryLinks.length, isCategory]);
 
   if (!isOpen) return null;
 
@@ -79,6 +155,13 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
     navigator.clipboard.writeText(shareUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const handleCopyCode = () => {
+    if (!quickCode) return;
+    navigator.clipboard.writeText(quickCode);
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
   };
 
   const handleDownloadQr = () => {
@@ -148,9 +231,22 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
                       </span>
                     )}
                   </div>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {categoryLinks.length} {categoryLinks.length === 1 ? 'saved link' : 'saved links'} included
-                  </span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300">
+                      {resolvedCategoryLinks.length}{' '}
+                      {resolvedCategoryLinks.length === 1 ? 'link' : 'links'} ready to beam
+                    </span>
+                    {resolvedCategoryLinks.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowLinksPreview(!showLinksPreview)}
+                        className="text-[11px] text-blue-600 dark:text-cyan-400 hover:underline flex items-center gap-0.5 cursor-pointer"
+                      >
+                        {showLinksPreview ? 'Hide' : 'Preview'}
+                        {showLinksPreview ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
               <span className="text-[10px] font-semibold px-2 py-1 bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md shrink-0">
@@ -159,14 +255,41 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
             </div>
           )}
 
-          {!isCategory && link && (
+          {/* Expandable list of links being shared */}
+          {isCategory && showLinksPreview && resolvedCategoryLinks.length > 0 && (
+            <div className="w-full max-h-36 overflow-y-auto space-y-1 p-2 rounded-xl bg-slate-100/70 dark:bg-[#111B2E]/90 border border-slate-200 dark:border-slate-800 text-left">
+              {resolvedCategoryLinks.map((l, idx) => (
+                <div key={idx} className="flex items-center gap-2 p-1.5 rounded-lg bg-white dark:bg-[#0D1422] text-xs">
+                  <span className="w-4 h-4 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-cyan-300 text-[10px] font-bold flex items-center justify-center shrink-0">
+                    {idx + 1}
+                  </span>
+                  <div className="min-w-0 flex-1 truncate">
+                    <p className="font-medium text-slate-800 dark:text-slate-200 truncate">{l.title || l.url}</p>
+                    <p className="text-[10px] text-slate-400 truncate">{l.url}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Zero links warning if category is empty */}
+          {isCategory && resolvedCategoryLinks.length === 0 && (
+            <div className="w-full flex items-start gap-2 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/40 text-left text-amber-900 dark:text-amber-300 text-xs">
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <p className="leading-snug">
+                <strong>Empty Category:</strong> There are no saved links in &ldquo;{category?.name}&rdquo; yet. The recipient will only receive the folder structure. Add links to this category if you want to share your bookmarks.
+              </p>
+            </div>
+          )}
+
+          {!isCategory && activeLink && (
             <div className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-[#111B2E]/50 border border-slate-200/80 dark:border-slate-800 flex items-center gap-3 text-left min-w-0">
               <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-100 dark:border-blue-900/40 flex items-center justify-center text-blue-600 dark:text-cyan-400 shrink-0">
                 <Share2 className="w-4 h-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <h4 className="font-bold text-slate-800 dark:text-slate-200 text-xs sm:text-sm truncate">{link.title}</h4>
-                <p className="font-mono text-[11px] text-slate-400 dark:text-slate-500 truncate mt-0.5">{link.url}</p>
+                <h4 className="font-bold text-slate-800 dark:text-slate-200 text-xs sm:text-sm truncate">{activeLink.title}</h4>
+                <p className="font-mono text-[11px] text-slate-400 dark:text-slate-500 truncate mt-0.5">{activeLink.url}</p>
               </div>
             </div>
           )}
@@ -178,6 +301,33 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
               <p className="leading-snug">
                 <strong>Privacy Preserved:</strong> When scanned by another user of this app, this category will automatically be saved as <strong>Private</strong> (hidden from their All Links page).
               </p>
+            </div>
+          )}
+
+          {/* Quick Share Code Banner */}
+          {quickCode && (
+            <div className="w-full p-2.5 rounded-xl bg-gradient-to-r from-blue-50 dark:from-blue-950/40 via-cyan-50 dark:via-cyan-950/30 to-blue-50 dark:to-blue-950/40 border border-blue-200 dark:border-cyan-900/60 flex items-center justify-between gap-2 shadow-2xs">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-blue-600/10 dark:bg-cyan-400/10 flex items-center justify-center text-blue-600 dark:text-cyan-400 shrink-0">
+                  <Zap className="w-4 h-4" />
+                </div>
+                <div className="text-left min-w-0">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-slate-400 tracking-wider">
+                    Quick Code
+                  </div>
+                  <div className="font-mono font-bold text-sm tracking-widest text-blue-700 dark:text-cyan-300">
+                    {quickCode.slice(0, 3)} {quickCode.slice(3)}
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                id="copy-quick-code-btn"
+                onClick={handleCopyCode}
+                className="px-2.5 py-1.5 rounded-lg bg-blue-600 dark:bg-cyan-500 hover:bg-blue-700 dark:hover:bg-cyan-400 text-white dark:text-slate-950 font-bold text-[11px] transition-colors cursor-pointer shrink-0"
+              >
+                {copiedCode ? 'Copied!' : 'Copy Code'}
+              </button>
             </div>
           )}
 
@@ -197,7 +347,14 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
                 />
               </div>
             ) : (
-              <p className="text-xs text-rose-500">Failed to generate QR code.</p>
+              <div className="p-3 text-center">
+                <p className="text-xs font-semibold text-rose-500">Failed to generate QR code.</p>
+                {errorMessage && (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 max-w-[220px]">
+                    {errorMessage}
+                  </p>
+                )}
+              </div>
             )}
           </div>
 

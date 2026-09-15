@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with optional security PIN hash and security questions",
+      "type": "object",
+      "properties": {
+        "pinHash": { "type": "string", "description": "Hashed 4-digit PIN for private categories" },
+        "securityQuestion": { "type": "string", "description": "Security question for PIN recovery" },
+        "securityAnswerHash": { "type": "string", "description": "Hashed answer for security question" },
+        "updatedAt": { "type": "number", "description": "Timestamp of last profile update" }
+      }
+    },
+    "Category": {
+      "title": "Category",
+      "description": "User folder/category for organizing links",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique category identifier or slug" },
+        "name": { "type": "string", "description": "Human-readable category name" },
+        "slug": { "type": "string", "description": "Normalized category slug" },
+        "icon": { "type": "string", "description": "Icon identifier name" },
+        "color": { "type": "string", "description": "Hex color code" },
+        "hideFromAll": { "type": "boolean", "description": "Whether this is a private category hidden from the All tab" },
+        "description": { "type": "string", "description": "Optional category description" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in milliseconds" }
+      },
+      "required": ["name", "slug"]
+    },
+    "SavedLink": {
+      "title": "SavedLink",
+      "description": "A saved bookmark link stored in the user vault",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique link document ID" },
+        "title": { "type": "string", "description": "Title of the link" },
+        "url": { "type": "string", "description": "Target web URL" },
+        "categorySlug": { "type": "string", "description": "Slug of the category this link belongs to" },
+        "description": { "type": "string", "description": "Notes or summary description" },
+        "tags": { "type": "array", "description": "Tags associated with the link" },
+        "imageUrl": { "type": "string", "description": "OpenGraph thumbnail preview URL" },
+        "faviconUrl": { "type": "string", "description": "Website favicon image URL" },
+        "isFavorite": { "type": "boolean", "description": "Star favorite status" },
+        "clickCount": { "type": "number", "description": "Number of times link was launched" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in milliseconds" },
+        "updatedAt": { "type": "number", "description": "Last modified timestamp in milliseconds" }
+      },
+      "required": ["title", "url", "categorySlug"]
+    },
+    "SharedBundle": {
+      "title": "SharedBundle",
+      "description": "Public share bundle containing category or link payloads with short code for instant transfer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique short bundle identifier" },
+        "shortCode": { "type": "string", "description": "6-digit quick transfer code" },
+        "categoryName": { "type": "string", "description": "Name of shared category or link" },
+        "itemCount": { "type": "number", "description": "Total links included in the bundle" },
+        "payload": { "type": "object", "description": "The complete QrSharePayload with all links and category metadata" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in milliseconds" }
+      },
+      "required": ["id", "payload"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Stores user security settings and credentials"
+    },
+    "/users/{userId}/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Stores categories created or imported by the user"
+    },
+    "/users/{userId}/links/{linkId}": {
+      "schema": "SavedLink",
+      "description": "Stores individual bookmark links in the user's vault"
+    },
+    "/shared_bundles/{bundleId}": {
+      "schema": "SharedBundle",
+      "description": "Stores public share bundles for clean short URLs and instant QR scanning"
+    }
+  }
+}

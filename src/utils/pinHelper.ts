@@ -127,3 +127,45 @@ export async function verifyPin(
     return false;
   }
 }
+
+/**
+ * Standard Security Questions for Vault Recovery
+ */
+export const DEFAULT_SECURITY_QUESTIONS = [
+  'What was the name of your first pet?',
+  'In which city were you born?',
+  'What is your mother’s maiden name?',
+  'What was the name of your first elementary school?',
+  'What was your childhood nickname?',
+  'What is the title of your all-time favorite book or movie?',
+] as const;
+
+/**
+ * Hash a security answer (normalized, lowercase and trimmed for resilient match)
+ */
+export async function hashSecurityAnswer(
+  answer: string,
+  salt: string = 'link_vault_sec_v1'
+): Promise<string> {
+  const normalized = (answer || '').trim().toLowerCase();
+  return hashPin(normalized, salt);
+}
+
+/**
+ * Verify a user-provided security answer against the stored hash
+ */
+export async function verifySecurityAnswer(
+  enteredAnswer: string,
+  storedHash: string,
+  salt: string = 'link_vault_sec_v1'
+): Promise<boolean> {
+  if (!enteredAnswer || !storedHash) return false;
+  try {
+    const enteredHash = await hashSecurityAnswer(enteredAnswer, salt);
+    return enteredHash.toLowerCase() === storedHash.toLowerCase();
+  } catch (err) {
+    console.error('Error verifying security answer:', err);
+    return false;
+  }
+}
+

@@ -70,7 +70,10 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
   const [hideFromAll, setHideFromAll] = useState(initialHideFromAll);
 
   // For category links, keep track of which links are selected
-  const categoryLinks = isCategory && payload?.type === 'category' ? payload.links : [];
+  const categoryLinks =
+    isCategory && payload?.type === 'category' && Array.isArray(payload.links)
+      ? payload.links
+      : [];
   const [selectedIndices, setSelectedIndices] = useState<number[]>(
     () => categoryLinks.map((_, i) => i)
   );
@@ -86,13 +89,14 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
     return existingCategories[0]?.slug || 'entertainment';
   });
 
-  // Re-sync privacy flag when payload changes
+  // Re-sync privacy flag when payload or modal visibility changes
   React.useEffect(() => {
     if (payload?.type === 'category') {
       setHideFromAll(Boolean(payload.category.hideFromAll));
-      setSelectedIndices(payload.links.map((_, i) => i));
+      const links = Array.isArray(payload.links) ? payload.links : [];
+      setSelectedIndices(links.map((_, i) => i));
     }
-  }, [payload]);
+  }, [payload, isOpen]);
 
   if (!isOpen || !payload) return null;
 
@@ -112,7 +116,12 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
 
   const handleConfirmImport = () => {
     if (payload.type === 'category') {
-      const selectedLinks = categoryLinks.filter((_, i) => selectedIndices.includes(i));
+      // If user hasn't explicitly unselected all, default to importing all category links
+      const selectedLinks =
+        selectedIndices.length > 0
+          ? categoryLinks.filter((_, i) => selectedIndices.includes(i))
+          : categoryLinks;
+
       onImportCategoryAndLinks(
         {
           name: payload.category.name,
@@ -120,7 +129,7 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
           icon: payload.category.icon || 'Bookmark',
           color: payload.category.color || '#4f46e5',
           hideFromAll: hideFromAll,
-          description: payload.category.description,
+          description: payload.category.description || '',
         },
         selectedLinks
       );
@@ -129,11 +138,11 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
         title: payload.link.title,
         url: payload.link.url,
         categorySlug: targetCategorySlug,
-        description: payload.link.description,
-        tags: payload.link.tags,
-        imageUrl: payload.link.imageUrl,
-        faviconUrl: payload.link.faviconUrl,
-        isFavorite: payload.link.isFavorite,
+        description: payload.link.description || '',
+        tags: Array.isArray(payload.link.tags) ? payload.link.tags : [],
+        imageUrl: payload.link.imageUrl || '',
+        faviconUrl: payload.link.faviconUrl || '',
+        isFavorite: Boolean(payload.link.isFavorite),
       });
     }
     onClose();
@@ -246,64 +255,72 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
 
               {/* Links list to be imported */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-semibold px-1">
-                  <span>Links to Import ({selectedIndices.length} of {categoryLinks.length})</span>
-                  <button
-                    type="button"
-                    onClick={toggleSelectAll}
-                    className="text-blue-600 dark:text-cyan-400 hover:text-blue-700 dark:hover:text-cyan-300 font-medium cursor-pointer"
-                  >
-                    {selectedIndices.length === categoryLinks.length ? 'Deselect All' : 'Select All'}
-                  </button>
-                </div>
-
-                <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
-                  {categoryLinks.map((linkItem, idx) => {
-                    const isSelected = selectedIndices.includes(idx);
-                    const domain = extractHostname(linkItem.url);
-                    const favicon = linkItem.faviconUrl || getFaviconUrl(linkItem.url);
-
-                    return (
-                      <div
-                        key={idx}
-                        onClick={() => toggleIndex(idx)}
-                        className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-white dark:bg-[#111B2E] border-blue-200 dark:border-blue-900/60 shadow-2xs'
-                            : 'bg-slate-50/60 dark:bg-[#070B14]/40 border-slate-200 dark:border-slate-800 opacity-60'
-                        }`}
+                {categoryLinks.length > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 font-semibold px-1">
+                      <span>Links to Import ({selectedIndices.length} of {categoryLinks.length})</span>
+                      <button
+                        type="button"
+                        onClick={toggleSelectAll}
+                        className="text-blue-600 dark:text-cyan-400 hover:text-blue-700 dark:hover:text-cyan-300 font-medium cursor-pointer"
                       >
-                        <div className="text-blue-600 dark:text-cyan-400 shrink-0">
-                          {isSelected ? (
-                            <CheckSquare className="w-4 h-4" />
-                          ) : (
-                            <Square className="w-4 h-4 text-slate-400 dark:text-slate-600" />
-                          )}
-                        </div>
+                        {selectedIndices.length === categoryLinks.length ? 'Deselect All' : 'Select All'}
+                      </button>
+                    </div>
 
-                        <div className="w-6 h-6 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-1 flex items-center justify-center shrink-0">
-                          <img
-                            src={favicon}
-                            alt=""
-                            className="w-3.5 h-3.5 object-contain"
-                            onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                        </div>
+                    <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1 scrollbar-thin">
+                      {categoryLinks.map((linkItem, idx) => {
+                        const isSelected = selectedIndices.includes(idx);
+                        const domain = extractHostname(linkItem.url);
+                        const favicon = linkItem.faviconUrl || getFaviconUrl(linkItem.url);
 
-                        <div className="min-w-0 flex-1">
-                          <h5 className="font-semibold text-slate-800 dark:text-slate-200 text-xs truncate">
-                            {linkItem.title}
-                          </h5>
-                          <p className="font-mono text-[10px] text-slate-400 dark:text-slate-500 truncate">
-                            {domain}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                        return (
+                          <div
+                            key={idx}
+                            onClick={() => toggleIndex(idx)}
+                            className={`flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-white dark:bg-[#111B2E] border-blue-200 dark:border-blue-900/60 shadow-2xs'
+                                : 'bg-slate-50/60 dark:bg-[#070B14]/40 border-slate-200 dark:border-slate-800 opacity-60'
+                            }`}
+                          >
+                            <div className="text-blue-600 dark:text-cyan-400 shrink-0">
+                              {isSelected ? (
+                                <CheckSquare className="w-4 h-4" />
+                              ) : (
+                                <Square className="w-4 h-4 text-slate-400 dark:text-slate-600" />
+                              )}
+                            </div>
+
+                            <div className="w-6 h-6 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-1 flex items-center justify-center shrink-0">
+                              <img
+                                src={favicon}
+                                alt=""
+                                className="w-3.5 h-3.5 object-contain"
+                                onError={(e) => {
+                                  (e.target as HTMLElement).style.display = 'none';
+                                }}
+                              />
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <h5 className="font-semibold text-slate-800 dark:text-slate-200 text-xs truncate">
+                                {linkItem.title}
+                              </h5>
+                              <p className="font-mono text-[10px] text-slate-400 dark:text-slate-500 truncate">
+                                {domain}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#111B2E]/40 border border-slate-200/80 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-400">
+                    This shared category does not contain any links. You can still save the folder structure to your vault.
+                  </div>
+                )}
               </div>
             </>
           ) : payload.type === 'link' ? (
@@ -373,13 +390,15 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
             type="button"
             id="confirm-import-shared-btn"
             onClick={handleConfirmImport}
-            disabled={isCategory && selectedIndices.length === 0}
+            disabled={isCategory && categoryLinks.length > 0 && selectedIndices.length === 0}
             className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
           >
             <DownloadCloud className="w-4 h-4" />
             <span>
               {isCategory
-                ? `Save All (${selectedIndices.length}) to My Vault`
+                ? categoryLinks.length > 0
+                  ? `Save All (${selectedIndices.length}) to My Vault`
+                  : 'Save Category Folder'
                 : 'Save to My Vault'}
             </span>
           </button>

@@ -16,12 +16,17 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
+  getDocs,
+  where,
+  limit,
   updateDoc,
   deleteDoc,
   onSnapshot,
   query,
   orderBy,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -50,12 +55,17 @@ export {
   collection,
   doc,
   setDoc,
+  getDoc,
+  getDocs,
+  where,
+  limit,
   updateDoc,
   deleteDoc,
   onSnapshot,
   query,
   orderBy,
   serverTimestamp,
+  writeBatch,
 };
 
 export type { User };

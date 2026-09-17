@@ -12,7 +12,12 @@ export function getLocalCategories(): Category[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return parsed.sort((a, b) => {
+          if (typeof a.order === 'number' && typeof b.order === 'number') {
+            return a.order - b.order;
+          }
+          return 0;
+        });
       }
     }
   } catch (e) {

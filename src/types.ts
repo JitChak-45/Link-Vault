@@ -8,6 +8,7 @@ export interface Category {
   isDefault?: boolean;
   hideFromAll?: boolean;
   createdAt: number;
+  order?: number;
 }
 
 export interface SavedLink {

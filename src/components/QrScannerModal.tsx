@@ -193,7 +193,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
   return (
     <div
       id="qr-scanner-modal-overlay"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-200"
       onClick={() => {
         stopCamera();
         onClose();
@@ -201,11 +201,11 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     >
       <div
         id="qr-scanner-modal-dialog"
-        className="w-full max-w-md bg-white dark:bg-[#0D1422] rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-150"
+        className="w-full max-w-md bg-white dark:bg-[#0D1422] rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-150 flex flex-col max-h-[92vh] my-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/70 dark:bg-[#111B2E]/60 flex items-center justify-between">
+        <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/70 dark:bg-[#111B2E]/60 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-blue-600 dark:bg-cyan-500 text-white dark:text-slate-950 flex items-center justify-center shadow-xs">
               <Camera className="w-5 h-5" />
@@ -281,7 +281,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
 
         {/* Tab 1: Live Camera Scanner */}
         {activeTab === 'camera' && (
-          <div className="p-4 sm:p-5 flex flex-col items-center bg-white dark:bg-[#0D1422]">
+          <div className="p-4 sm:p-5 flex-1 overflow-y-auto flex flex-col items-center bg-white dark:bg-[#0D1422] overscroll-contain">
             {cameraError ? (
               <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 text-amber-900 dark:text-amber-300 text-xs text-center space-y-3 w-full">
                 <AlertCircle className="w-6 h-6 text-amber-600 dark:text-amber-400 mx-auto" />
@@ -343,7 +343,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
 
         {/* Tab 2: Upload Image */}
         {activeTab === 'upload' && (
-          <div className="p-5 sm:p-6 text-center space-y-4 bg-white dark:bg-[#0D1422]">
+          <div className="p-5 sm:p-6 flex-1 overflow-y-auto text-center space-y-4 bg-white dark:bg-[#0D1422] overscroll-contain">
             <label
               htmlFor="qr-file-upload-input"
               className="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 dark:hover:border-cyan-400 rounded-2xl bg-slate-50/60 dark:bg-[#111B2E]/40 hover:bg-blue-50/30 dark:hover:bg-cyan-950/20 transition-all cursor-pointer group"
@@ -361,7 +361,13 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
                 id="qr-file-upload-input"
                 type="file"
                 accept="image/*"
-                onChange={handleFileUpload}
+                onClick={() => {
+                  (window as any).__linkVaultFilePickerActive = true;
+                }}
+                onChange={(e) => {
+                  (window as any).__linkVaultFilePickerActive = false;
+                  handleFileUpload(e);
+                }}
                 className="hidden"
               />
             </label>
@@ -376,7 +382,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
 
         {/* Tab 3: Quick Code / URL */}
         {activeTab === 'paste' && (
-          <div className="p-5 sm:p-6 space-y-3 bg-white dark:bg-[#0D1422]">
+          <div className="p-5 sm:p-6 flex-1 overflow-y-auto space-y-3 bg-white dark:bg-[#0D1422] overscroll-contain">
             <label htmlFor="paste-code-input" className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
               Enter 6-Digit Quick Code or Share Link:
             </label>

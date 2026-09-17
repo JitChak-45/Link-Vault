@@ -56,6 +56,7 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showLinksPreview, setShowLinksPreview] = useState<boolean>(false);
+  const [retryCount, setRetryCount] = useState<number>(0);
 
   const activeLink = propLink || singleLink || null;
   const isCategory = Boolean(category && !activeLink);
@@ -120,15 +121,32 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
         } catch (cloudErr) {
           console.warn('Cloud share bundle upload fallback:', cloudErr);
           // Fallback: local compact encoding
-          const token = await encodeShareDataAsync(payload);
-          const url = generateShareUrl(payload, token);
-          if (!isMounted) return;
-          setShareUrl(url);
+          try {
+            const token = await encodeShareDataAsync(payload);
+            const url = generateShareUrl(payload, token);
+            if (!isMounted) return;
+            setShareUrl(url);
 
-          const dataUrl = await generateQrDataUrl(url);
-          if (!isMounted) return;
-          setQrDataUrl(dataUrl);
-          setIsLoading(false);
+            const dataUrl = await generateQrDataUrl(url);
+            if (!isMounted) return;
+            setQrDataUrl(dataUrl);
+            setIsLoading(false);
+          } catch (qrErr: any) {
+            console.warn('Direct local QR encode error:', qrErr);
+            if (!isMounted) return;
+            setIsLoading(false);
+            if (isCategory && resolvedCategoryLinks.length > 20) {
+              setErrorMessage(
+                `This category has ${resolvedCategoryLinks.length} links. Cloud share sync is required for large collections. Please check your connection and tap Retry.`
+              );
+            } else {
+              setErrorMessage(
+                qrErr instanceof Error
+                  ? qrErr.message
+                  : 'Failed to generate QR code. You can still use the Send Link button below.'
+              );
+            }
+          }
         }
       } catch (err) {
         console.error('QR code generation failed:', err);
@@ -147,7 +165,7 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, category?.id, category?.slug, category?.name, activeLink?.id, activeLink?.url, resolvedCategoryLinks.length, isCategory]);
+  }, [isOpen, category?.id, category?.slug, category?.name, activeLink?.id, activeLink?.url, resolvedCategoryLinks.length, isCategory, retryCount]);
 
   if (!isOpen) return null;
 
@@ -172,46 +190,97 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
     downloadQrCode(qrDataUrl, filename);
   };
 
+  const handleShare = async () => {
+    const categoryTitle = category?.name || 'Category';
+    const linkTitle = activeLink?.title || activeLink?.url || 'Saved Link';
+    const title = isCategory ? `Link Vault: ${categoryTitle}` : `Link Vault: ${linkTitle}`;
+    const cleanUrl = shareUrl || window.location.href;
+    const codeNotice = quickCode ? ` (Quick Code: ${quickCode})` : '';
+    // Including the clean URL directly in the share text ensures messaging apps (WhatsApp, Telegram, etc.) never truncate or lose the link
+    const text = isCategory
+      ? `Link Vault - "${categoryTitle}" (${resolvedCategoryLinks.length} links)${codeNotice}:\n${cleanUrl}`
+      : `Link Vault - "${linkTitle}"${codeNotice}:\n${cleanUrl}`;
+
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        if (qrDataUrl && navigator.canShare) {
+          try {
+            const res = await fetch(qrDataUrl);
+            const blob = await res.blob();
+            const filename = isCategory
+              ? `link-vault-${category?.slug || 'category'}-qr.png`
+              : 'link-vault-qr.png';
+            const file = new File([blob], filename, { type: 'image/png' });
+            if (navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                title,
+                text,
+                url: cleanUrl,
+                files: [file],
+              });
+              return;
+            }
+          } catch {
+            // fallback to standard text/url share
+          }
+        }
+
+        await navigator.share({
+          title,
+          text,
+          url: cleanUrl,
+        });
+        return;
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+      }
+    }
+
+    // Fallback if native Web Share is unavailable (e.g. desktop browsers without share sheet)
+    handleCopyLink();
+  };
+
   return (
     <div
       id="qr-share-modal-overlay"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200"
       onClick={onClose}
     >
-      <div
-        id="qr-share-modal-dialog"
-        className="w-full max-w-md bg-white dark:bg-[#0D1422] rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-150"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/70 dark:bg-[#111B2E]/60 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-blue-600 dark:bg-cyan-500 text-white dark:text-slate-950 flex items-center justify-center shadow-xs">
-              <QrCode className="w-5 h-5" />
+      <div className="min-h-full flex items-center justify-center py-2 sm:py-4">
+        <div
+          id="qr-share-modal-dialog"
+          className="relative w-full max-w-md bg-white dark:bg-[#0D1422] rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[84vh] sm:max-h-[88vh] overflow-hidden my-auto animate-in zoom-in-95 duration-150"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800/80 bg-slate-50/70 dark:bg-[#111B2E]/60 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-blue-600 dark:bg-cyan-500 text-white dark:text-slate-950 flex items-center justify-center shadow-xs">
+                <QrCode className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-[#0F172A] dark:text-[#F1F5F9] font-['Space_Grotesk'] text-sm sm:text-base">
+                  {isCategory ? 'Share Category via QR' : 'Share Link via QR'}
+                </h3>
+                <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                  {isCategory
+                    ? 'Transfer this entire category with all links'
+                    : 'Instantly beam this link to another device'}
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-bold text-[#0F172A] dark:text-[#F1F5F9] font-['Space_Grotesk'] text-sm sm:text-base">
-                {isCategory ? 'Share Category via QR' : 'Share Link via QR'}
-              </h3>
-              <p className="text-[11px] text-slate-400 dark:text-slate-500">
-                {isCategory
-                  ? 'Transfer this entire category with all links'
-                  : 'Instantly beam this link to another device'}
-              </p>
-            </div>
+            <button
+              type="button"
+              id="close-qr-share-modal-btn"
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-[#111B2E] transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            id="close-qr-share-modal-btn"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-[#111B2E] transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
 
-        {/* Modal Content */}
-        <div className="p-5 sm:p-6 flex flex-col items-center text-center space-y-4 bg-white dark:bg-[#0D1422]">
+          {/* Scrollable Modal Content */}
+          <div className="p-4 sm:p-5 flex-1 min-h-0 overflow-y-auto modal-scroll-body flex flex-col items-center text-center space-y-3.5 bg-white dark:bg-[#0D1422] overscroll-contain">
           {/* Information summary badge */}
           {isCategory && category && (
             <div className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-[#111B2E]/50 border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-3 text-left">
@@ -306,7 +375,7 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
 
           {/* Quick Share Code Banner */}
           {quickCode && (
-            <div className="w-full p-2.5 rounded-xl bg-gradient-to-r from-blue-50 dark:from-blue-950/40 via-cyan-50 dark:via-cyan-950/30 to-blue-50 dark:to-blue-950/40 border border-blue-200 dark:border-cyan-900/60 flex items-center justify-between gap-2 shadow-2xs">
+            <div className="w-full p-2.5 rounded-xl bg-gradient-to-r from-blue-50 dark:from-blue-950/40 via-cyan-50 dark:via-cyan-950/30 to-blue-50 dark:to-blue-950/40 border border-blue-200 dark:border-cyan-900/60 flex items-center justify-between gap-2 shadow-2xs shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 rounded-lg bg-blue-600/10 dark:bg-cyan-400/10 flex items-center justify-center text-blue-600 dark:text-cyan-400 shrink-0">
                   <Zap className="w-4 h-4" />
@@ -332,9 +401,9 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
           )}
 
           {/* QR Code Display Card */}
-          <div className="p-4 bg-white rounded-2xl border-2 border-slate-200/90 dark:border-slate-700 shadow-sm flex flex-col items-center justify-center min-h-[240px] w-full max-w-[260px]">
+          <div className="p-3.5 bg-white rounded-2xl border-2 border-slate-200/90 dark:border-slate-700 shadow-xs flex flex-col items-center justify-center w-full max-w-[240px] shrink-0">
             {isLoading ? (
-              <div className="flex flex-col items-center gap-2 text-slate-400 py-10">
+              <div className="flex flex-col items-center gap-2 text-slate-400 py-8">
                 <div className="w-8 h-8 border-3 border-blue-600 dark:border-cyan-400 border-t-transparent rounded-full animate-spin" />
                 <span className="text-xs">Generating high-res QR code...</span>
               </div>
@@ -343,17 +412,25 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
                 <img
                   src={qrDataUrl}
                   alt="QR Code"
-                  className="w-56 h-56 object-contain rounded-lg"
+                  className="w-48 h-48 sm:w-52 sm:h-52 object-contain rounded-lg"
                 />
               </div>
             ) : (
-              <div className="p-3 text-center">
+              <div className="p-3 text-center flex flex-col items-center">
                 <p className="text-xs font-semibold text-rose-500">Failed to generate QR code.</p>
                 {errorMessage && (
                   <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 max-w-[220px]">
                     {errorMessage}
                   </p>
                 )}
+                <button
+                  type="button"
+                  id="retry-generate-qr-btn"
+                  onClick={() => setRetryCount((c) => c + 1)}
+                  className="mt-2.5 px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 dark:bg-cyan-500 dark:hover:bg-cyan-400 text-white dark:text-slate-950 text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Retry
+                </button>
               </div>
             )}
           </div>
@@ -361,41 +438,62 @@ export const QrShareModal: React.FC<QrShareModalProps> = ({
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs leading-relaxed">
             Scan this QR code using a phone camera or the <strong>Scan QR</strong> button in this app to save automatically.
           </p>
+        </div>
 
-          {/* Action Buttons */}
-          <div className="grid grid-cols-2 gap-2.5 w-full pt-1">
+        {/* Pinned Action Buttons Footer - Always Visible on Laptop & Desktop */}
+        <div className="p-3 sm:p-4 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/80 dark:bg-[#111B2E]/70 shrink-0 w-full">
+          <div className="grid grid-cols-3 gap-2 w-full">
+            {/* Share Button (Web Share API or Instant Copy) */}
+            <button
+              type="button"
+              id="share-qr-btn"
+              onClick={handleShare}
+              disabled={isLoading || !shareUrl}
+              className="flex items-center justify-center gap-1.5 px-2.5 py-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-blue-700 dark:text-cyan-300 font-semibold text-xs border border-blue-200/70 dark:border-blue-900/50 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+              title="Share via native share sheet or copy"
+            >
+              <Share2 className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Share</span>
+            </button>
+
+            {/* Send Link / Copy Link Button */}
             <button
               type="button"
               id="copy-share-url-btn"
               onClick={handleCopyLink}
-              className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 bg-white dark:bg-[#070B14] hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-all shadow-2xs cursor-pointer"
+              disabled={isLoading || !shareUrl}
+              className="flex items-center justify-center gap-1.5 px-2.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 bg-white dark:bg-[#070B14] hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-xs transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+              title="Copy share link to clipboard"
             >
               {copiedLink ? (
                 <>
-                  <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span className="text-emerald-700 dark:text-emerald-400">Link Copied!</span>
+                  <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="text-emerald-700 dark:text-emerald-400 truncate">Copied!</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                  <span>Copy Link</span>
+                  <Copy className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400 shrink-0" />
+                  <span className="truncate">Send Link</span>
                 </>
               )}
             </button>
 
+            {/* Download QR Button */}
             <button
               type="button"
               id="download-qr-image-btn"
               onClick={handleDownloadQr}
-              disabled={!qrDataUrl}
-              className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 text-white font-semibold text-xs transition-all shadow-2xs cursor-pointer"
+              disabled={!qrDataUrl || isLoading}
+              className="flex items-center justify-center gap-1.5 px-2.5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 text-white font-semibold text-xs transition-all shadow-2xs cursor-pointer"
+              title="Download QR code image file"
             >
-              <Download className="w-4 h-4" />
-              <span>Download QR</span>
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Download</span>
             </button>
           </div>
         </div>
       </div>
     </div>
-  );
+  </div>
+);
 };

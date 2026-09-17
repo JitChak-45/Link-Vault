@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { flushSync } from 'react-dom';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Lock,
   Unlock,
@@ -15,6 +17,8 @@ import {
   ArrowLeft,
   ShieldAlert,
   ChevronDown,
+  Fingerprint,
+  ExternalLink,
 } from 'lucide-react';
 import {
   hashPin,
@@ -23,6 +27,146 @@ import {
   hashSecurityAnswer,
   verifySecurityAnswer,
 } from '../utils/pinHelper';
+import {
+  checkBiometricSupport,
+  authenticateWithFingerprint,
+  registerDeviceFingerprint,
+} from '../utils/biometricHelper';
+
+interface PinDotsProps {
+  currentDisplayPin: string;
+  revealDigits: boolean;
+}
+
+const PinDots = React.memo<PinDotsProps>(({ currentDisplayPin, revealDigits }) => {
+  return (
+    <div id="pin-dots-container" className="flex items-center justify-center gap-3 my-3">
+      {[0, 1, 2, 3, 4, 5].map((index) => {
+        const isFilled = index < currentDisplayPin.length;
+        const digitVal = currentDisplayPin[index];
+
+        return (
+          <div
+            key={index}
+            className={`w-4 h-4 rounded-full transition-colors duration-75 flex items-center justify-center ${
+              isFilled
+                ? 'bg-blue-600 dark:bg-cyan-400 border border-blue-500 dark:border-cyan-300 shadow-xs'
+                : 'bg-slate-200 dark:bg-slate-800 border border-slate-300 dark:border-slate-700'
+            }`}
+          >
+            {isFilled && revealDigits && (
+              <span className="text-[10px] font-bold text-white dark:text-slate-950">
+                {digitVal}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+interface KeypadDigitProps {
+  digit: string;
+  onPress: (digit: string) => void;
+  disabled: boolean;
+}
+
+const KeypadDigit = React.memo<KeypadDigitProps>(({ digit, onPress, disabled }) => {
+  return (
+    <button
+      type="button"
+      id={`keypad-digit-${digit}`}
+      onClick={() => onPress(digit)}
+      disabled={disabled}
+      className="h-12 sm:h-13 rounded-2xl bg-slate-50 dark:bg-[#111B2E] hover:bg-slate-100 dark:hover:bg-[#16233B] active:bg-blue-600 active:text-white dark:active:bg-cyan-500 dark:active:text-slate-950 border border-slate-200/80 dark:border-slate-800 text-slate-800 dark:text-slate-100 text-lg sm:text-xl font-bold font-['Space_Grotesk'] transition-colors duration-75 flex items-center justify-center active:scale-95 disabled:opacity-50 select-none shadow-2xs cursor-pointer touch-manipulation"
+    >
+      {digit}
+    </button>
+  );
+});
+
+interface PinKeypadProps {
+  onDigitPress: (digit: string) => void;
+  onClear: () => void;
+  onBackspace: () => void;
+  isSubmitting: boolean;
+  hasInput: boolean;
+  onFingerprintPress?: () => void;
+  showFingerprintKey?: boolean;
+  isBiometricScanning?: boolean;
+}
+
+const PinKeypad = React.memo<PinKeypadProps>(({
+  onDigitPress,
+  onClear,
+  onBackspace,
+  isSubmitting,
+  hasInput,
+  onFingerprintPress,
+  showFingerprintKey = false,
+  isBiometricScanning = false,
+}) => {
+  return (
+    <div id="pin-keypad" className="grid grid-cols-3 gap-2 sm:gap-2.5 w-full max-w-[260px] mb-2">
+      {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
+        <KeypadDigit
+          key={digit}
+          digit={digit}
+          onPress={onDigitPress}
+          disabled={isSubmitting}
+        />
+      ))}
+
+      {/* Bottom-left: Fingerprint key when no input entered, or Clear button when digits exist */}
+      {showFingerprintKey && !hasInput ? (
+        <button
+          type="button"
+          id="keypad-fingerprint-btn"
+          onClick={onFingerprintPress}
+          disabled={isSubmitting || isBiometricScanning}
+          className="h-12 sm:h-13 rounded-2xl bg-cyan-50 dark:bg-cyan-950/40 hover:bg-cyan-100 dark:hover:bg-cyan-900/50 active:bg-cyan-200 dark:active:bg-cyan-900/70 border border-cyan-200/80 dark:border-cyan-800/60 text-cyan-600 dark:text-cyan-400 transition-all duration-75 flex flex-col items-center justify-center select-none cursor-pointer text-[10px] font-bold touch-manipulation group active:scale-95 shadow-2xs"
+          title="Unlock with Fingerprint"
+        >
+          <Fingerprint className={`w-5 h-5 ${isBiometricScanning ? 'animate-pulse text-cyan-500' : 'group-hover:scale-110'} transition-transform`} />
+          <span className="text-[8px] sm:text-[9px] uppercase tracking-wider font-extrabold mt-0.5">
+            {isBiometricScanning ? 'Scan' : 'Touch'}
+          </span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          id="keypad-clear-btn"
+          onClick={onClear}
+          disabled={isSubmitting || !hasInput}
+          className="h-12 sm:h-13 rounded-2xl text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 active:bg-slate-200 dark:active:bg-slate-800 transition-colors duration-75 flex items-center justify-center disabled:opacity-20 select-none cursor-pointer text-xs font-semibold touch-manipulation"
+          title="Clear input"
+        >
+          Clear
+        </button>
+      )}
+
+      {/* Zero digit */}
+      <KeypadDigit
+        digit="0"
+        onPress={onDigitPress}
+        disabled={isSubmitting}
+      />
+
+      {/* Backspace button */}
+      <button
+        type="button"
+        id="keypad-backspace-btn"
+        onClick={onBackspace}
+        disabled={isSubmitting || !hasInput}
+        className="h-12 sm:h-13 rounded-2xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 active:bg-slate-200 dark:active:bg-slate-800 transition-colors duration-75 flex items-center justify-center disabled:opacity-30 select-none cursor-pointer touch-manipulation"
+        title="Delete digit"
+      >
+        <Delete className="w-5 h-5" />
+      </button>
+    </div>
+  );
+});
 
 interface PinLockScreenProps {
   isLocked: boolean;
@@ -76,17 +220,52 @@ export const PinLockScreen: React.FC<PinLockScreenProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [revealDigits, setRevealDigits] = useState(false);
 
+  // Biometrics states (Phone Fingerprint / Touch ID)
+  const [biometricSupported, setBiometricSupported] = useState(false);
+  const [biometricEnrolled, setBiometricEnrolled] = useState(false);
+  const [biometricEnabled, setBiometricEnabledState] = useState(true);
+  const [isBiometricScanning, setIsBiometricScanning] = useState(false);
+  const [iframeRestrictedNotice, setIframeRestrictedNotice] = useState(false);
+
   const answerInputRef = useRef<HTMLInputElement>(null);
+  const pinRef = useRef(pin);
+  pinRef.current = pin;
+  const confirmPinRef = useRef(confirmPin);
+  confirmPinRef.current = confirmPin;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+  const setupStepRef = useRef(setupStep);
+  setupStepRef.current = setupStep;
+  const tempFirstPinRef = useRef(tempFirstPin);
+  tempFirstPinRef.current = tempFirstPin;
+  const storedPinHashRef = useRef(storedPinHash);
+  storedPinHashRef.current = storedPinHash;
+  const securityQuestionRef = useRef(securityQuestion);
+  securityQuestionRef.current = securityQuestion;
+  const securityAnswerHashRef = useRef(securityAnswerHash);
+  securityAnswerHashRef.current = securityAnswerHash;
+  const isForgotRecoveryRef = useRef(isForgotRecovery);
+  isForgotRecoveryRef.current = isForgotRecovery;
+  const isSubmittingRef = useRef(isSubmitting);
+  isSubmittingRef.current = isSubmitting;
+  const onUnlockRef = useRef(onUnlock);
+  onUnlockRef.current = onUnlock;
+  const onPinConfiguredRef = useRef(onPinConfigured);
+  onPinConfiguredRef.current = onPinConfigured;
 
   // Reset or initialize state whenever locked or pin state changes
   useEffect(() => {
     setPin('');
+    pinRef.current = '';
     setConfirmPin('');
+    confirmPinRef.current = '';
     setTempFirstPin('');
+    tempFirstPinRef.current = '';
     setPendingPinHash(null);
     setError(null);
     setSuccessMsg(null);
     setIsSubmitting(false);
+    isSubmittingRef.current = false;
     setIsForgotRecovery(false);
     setSecurityAnswerInput('');
     setCustomQuestion('');
@@ -106,158 +285,233 @@ export const PinLockScreen: React.FC<PinLockScreenProps> = ({
     }
   }, [isLocked, hasPinSet, securityQuestion]);
 
+  // Detect whether device supports platform fingerprint / biometrics
+  useEffect(() => {
+    if (!isLocked) return;
+    let isMounted = true;
+    checkBiometricSupport().then((status) => {
+      if (!isMounted) return;
+      setBiometricSupported(status.supported);
+      setBiometricEnrolled(status.enrolled);
+      setBiometricEnabledState(status.enabled);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [isLocked]);
+
   // Focus answer input when entering forgot-verify or security step
   useEffect(() => {
     if (mode === 'forgot-verify' || setupStep === 'security') {
       setTimeout(() => {
         answerInputRef.current?.focus();
-      }, 100);
+      }, 50);
     }
   }, [mode, setupStep]);
 
   const triggerShake = useCallback(() => {
     setIsShaking(true);
-    setTimeout(() => setIsShaking(false), 450);
+    setTimeout(() => setIsShaking(false), 350);
   }, []);
 
-  // Handle digit press on numeric keypad
-  const handleDigitPress = useCallback(
-    async (digit: string) => {
-      if (isSubmitting) return;
+  const triggerShakeRef = useRef(triggerShake);
+  triggerShakeRef.current = triggerShake;
 
-      if (mode === 'enter-pin') {
-        // --- UNLOCK MODE ---
-        if (!storedPinHash) return;
-        if (pin.length < 6) {
-          const nextPin = pin + digit;
-          setPin(nextPin);
-          setError(null);
+  // Handle digit press on numeric keypad (Ref-based accumulator + synchronous flushSync batching for 0ms input latency)
+  const handleDigitPress = useCallback((digit: string) => {
+    if (isSubmittingRef.current) return;
 
-          if (nextPin.length === 6) {
-            try {
-              setIsSubmitting(true);
-              const isValid = await verifyPin(nextPin, storedPinHash);
-              if (isValid) {
-                setSuccessMsg('Unlocked!');
-                setTimeout(() => {
-                  onUnlock();
-                  setPin('');
-                  setSuccessMsg(null);
-                }, 200);
-              } else {
-                triggerShake();
-                setError('Incorrect PIN. Please try again.');
+    const currentMode = modeRef.current;
+    const currentStep = setupStepRef.current;
+
+    if (currentMode === 'enter-pin') {
+      // --- UNLOCK MODE ---
+      if (!storedPinHashRef.current) return;
+      if (pinRef.current.length >= 6) return;
+
+      const nextPin = pinRef.current + digit;
+      pinRef.current = nextPin;
+
+      // Synchronously flush state update to guarantee 0ms UI lag on digit entry
+      flushSync(() => {
+        setPin(nextPin);
+        setError(null);
+      });
+
+      if (nextPin.length === 6) {
+        (async () => {
+          try {
+            setIsSubmitting(true);
+            isSubmittingRef.current = true;
+            const targetHash = storedPinHashRef.current;
+            if (!targetHash) return;
+
+            const isValid = await verifyPin(nextPin, targetHash);
+            if (isValid) {
+              setSuccessMsg('Unlocked!');
+              setTimeout(() => {
+                onUnlockRef.current();
+                pinRef.current = '';
                 setPin('');
-              }
-            } catch (err) {
-              console.error('PIN verification error:', err);
-              setError('Verification error. Please try again.');
+                setSuccessMsg(null);
+              }, 100);
+            } else {
+              triggerShakeRef.current();
+              setError('Incorrect PIN. Please try again.');
+              pinRef.current = '';
               setPin('');
-            } finally {
-              setIsSubmitting(false);
             }
+          } catch (err) {
+            console.error('PIN verification error:', err);
+            setError('Verification error. Please try again.');
+            pinRef.current = '';
+            setPin('');
+          } finally {
+            setIsSubmitting(false);
+            isSubmittingRef.current = false;
           }
-        }
-      } else if (mode === 'setup-pin') {
-        // --- SETUP PIN MODE ---
-        if (setupStep === 'create') {
-          if (pin.length < 6) {
-            const nextPin = pin + digit;
+        })();
+      }
+    } else if (currentMode === 'setup-pin') {
+      // --- SETUP PIN MODE ---
+      if (currentStep === 'create') {
+        if (pinRef.current.length >= 6) return;
+
+        const nextPin = pinRef.current + digit;
+        pinRef.current = nextPin;
+
+        if (nextPin.length === 6) {
+          flushSync(() => {
+            setTempFirstPin(nextPin);
+            tempFirstPinRef.current = nextPin;
+            setPin('');
+            pinRef.current = '';
+            setSetupStep('confirm');
+            setupStepRef.current = 'confirm';
+            setError(null);
+          });
+        } else {
+          flushSync(() => {
             setPin(nextPin);
             setError(null);
+          });
+        }
+      } else if (currentStep === 'confirm') {
+        if (confirmPinRef.current.length >= 6) return;
 
-            if (nextPin.length === 6) {
-              setTempFirstPin(nextPin);
-              setPin('');
-              setSetupStep('confirm');
-            }
-          }
-        } else if (setupStep === 'confirm') {
-          if (confirmPin.length < 6) {
-            const nextConfirm = confirmPin + digit;
+        const nextConfirm = confirmPinRef.current + digit;
+        confirmPinRef.current = nextConfirm;
+
+        if (nextConfirm.length === 6) {
+          flushSync(() => {
             setConfirmPin(nextConfirm);
             setError(null);
+          });
 
-            if (nextConfirm.length === 6) {
-              if (nextConfirm === tempFirstPin) {
-                try {
-                  setIsSubmitting(true);
-                  const newHash = await hashPin(nextConfirm);
+          if (nextConfirm === tempFirstPinRef.current) {
+            (async () => {
+              try {
+                setIsSubmitting(true);
+                isSubmittingRef.current = true;
+                const newHash = await hashPin(nextConfirm);
 
-                  // If coming from forgot password recovery or question already exists
-                  if (isForgotRecovery && securityQuestion && securityAnswerHash) {
-                    await onPinConfigured(newHash);
-                    setSuccessMsg('New PIN set & Vault unlocked!');
-                    setTimeout(() => {
-                      onUnlock();
-                      setSuccessMsg(null);
-                      setIsForgotRecovery(false);
-                    }, 400);
-                  } else if (securityQuestion && securityAnswerHash && !isForgotRecovery) {
-                    // Changing PIN with existing security question
-                    await onPinConfigured(newHash);
-                    setSuccessMsg('PIN updated & secured!');
-                    setTimeout(() => {
-                      onUnlock();
-                      setSuccessMsg(null);
-                    }, 400);
-                  } else {
-                    // First time setup: require setting a security question!
-                    setPendingPinHash(newHash);
-                    setSetupStep('security');
-                    setError(null);
-                  }
-                } catch (err: any) {
-                  console.error('Error saving PIN:', err);
-                  setError('Failed to save PIN. Please try again.');
-                } finally {
-                  setIsSubmitting(false);
+                // If coming from forgot password recovery or question already exists
+                if (
+                  isForgotRecoveryRef.current &&
+                  securityQuestionRef.current &&
+                  securityAnswerHashRef.current
+                ) {
+                  await onPinConfiguredRef.current(newHash);
+                  setSuccessMsg('New PIN set & Vault unlocked!');
+                  setTimeout(() => {
+                    onUnlockRef.current();
+                    setSuccessMsg(null);
+                    setIsForgotRecovery(false);
+                  }, 200);
+                } else if (
+                  securityQuestionRef.current &&
+                  securityAnswerHashRef.current &&
+                  !isForgotRecoveryRef.current
+                ) {
+                  // Changing PIN with existing security question
+                  await onPinConfiguredRef.current(newHash);
+                  setSuccessMsg('PIN updated & secured!');
+                  setTimeout(() => {
+                    onUnlockRef.current();
+                    setSuccessMsg(null);
+                  }, 200);
+                } else {
+                  // First time setup: require setting a security question!
+                  setPendingPinHash(newHash);
+                  setSetupStep('security');
+                  setupStepRef.current = 'security';
+                  setError(null);
                 }
-              } else {
-                triggerShake();
-                setError('PINs did not match. Please re-enter.');
-                setConfirmPin('');
-                setPin('');
-                setTempFirstPin('');
-                setSetupStep('create');
+              } catch (err: any) {
+                console.error('Error saving PIN:', err);
+                setError('Failed to save PIN. Please try again.');
+              } finally {
+                setIsSubmitting(false);
+                isSubmittingRef.current = false;
               }
-            }
+            })();
+          } else {
+            triggerShakeRef.current();
+            setError('PINs did not match. Please re-enter.');
+            flushSync(() => {
+              setConfirmPin('');
+              confirmPinRef.current = '';
+              setPin('');
+              pinRef.current = '';
+              setTempFirstPin('');
+              tempFirstPinRef.current = '';
+              setSetupStep('create');
+              setupStepRef.current = 'create';
+            });
           }
+        } else {
+          flushSync(() => {
+            setConfirmPin(nextConfirm);
+            setError(null);
+          });
         }
       }
-    },
-    [
-      isSubmitting,
-      mode,
-      storedPinHash,
-      pin,
-      setupStep,
-      confirmPin,
-      tempFirstPin,
-      isForgotRecovery,
-      securityQuestion,
-      securityAnswerHash,
-      onUnlock,
-      onPinConfigured,
-      triggerShake,
-    ]
-  );
+    }
+  }, []);
 
   const handleBackspace = useCallback(() => {
-    if (isSubmitting) return;
+    if (isSubmittingRef.current) return;
     setError(null);
-    if (mode === 'enter-pin') {
-      setPin((prev) => prev.slice(0, -1));
-    } else if (mode === 'setup-pin') {
-      if (setupStep === 'create') {
-        setPin((prev) => prev.slice(0, -1));
-      } else if (setupStep === 'confirm') {
-        setConfirmPin((prev) => prev.slice(0, -1));
-      }
-    }
-  }, [isSubmitting, mode, setupStep]);
+    const currentMode = modeRef.current;
+    const currentStep = setupStepRef.current;
 
-  // Physical keyboard listener for PIN numeric keypad (disabled when typing text inputs)
+    if (currentMode === 'enter-pin' || (currentMode === 'setup-pin' && currentStep === 'create')) {
+      const next = pinRef.current.slice(0, -1);
+      pinRef.current = next;
+      flushSync(() => {
+        setPin(next);
+      });
+    } else if (currentMode === 'setup-pin' && currentStep === 'confirm') {
+      const next = confirmPinRef.current.slice(0, -1);
+      confirmPinRef.current = next;
+      flushSync(() => {
+        setConfirmPin(next);
+      });
+    }
+  }, []);
+
+  const handleClear = useCallback(() => {
+    if (isSubmittingRef.current) return;
+    pinRef.current = '';
+    confirmPinRef.current = '';
+    flushSync(() => {
+      setError(null);
+      setPin('');
+      setConfirmPin('');
+    });
+  }, []);
+
+  // Physical keyboard listener for PIN numeric keypad (attached once, zero re-binding lag)
   useEffect(() => {
     if (!isLocked) return;
 
@@ -364,7 +618,53 @@ export const PinLockScreen: React.FC<PinLockScreenProps> = ({
     }
   };
 
-  if (!isLocked) return null;
+  // Handle phone fingerprint authentication / registration
+  const handleFingerprintUnlock = async () => {
+    if (isBiometricScanning || isSubmitting) return;
+    setError(null);
+    setSuccessMsg(null);
+    setIframeRestrictedNotice(false);
+    setIsBiometricScanning(true);
+
+    try {
+      if (!biometricEnrolled) {
+        // Enrolling device fingerprint for the first time
+        const regRes = await registerDeviceFingerprint('Link Vault User');
+        if (regRes.success) {
+          setBiometricEnrolled(true);
+          setBiometricEnabledState(true);
+          setSuccessMsg('Fingerprint registered! Unlocking vault...');
+          setTimeout(() => {
+            onUnlock();
+          }, 350);
+        } else {
+          setError(regRes.error || 'Fingerprint registration cancelled.');
+          if (regRes.isIframeBlocked) {
+            setIframeRestrictedNotice(true);
+          }
+        }
+      } else {
+        // Authenticate with existing enrolled fingerprint
+        const authRes = await authenticateWithFingerprint();
+        if (authRes.success) {
+          setSuccessMsg('Fingerprint verified! Unlocking vault...');
+          setTimeout(() => {
+            onUnlock();
+          }, 300);
+        } else {
+          setError(authRes.error || 'Fingerprint verification failed.');
+          if (authRes.isIframeBlocked) {
+            setIframeRestrictedNotice(true);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('Biometric unlock caught:', err?.message || err);
+      setError('Fingerprint sensor not accessible. Please enter your 6-digit PIN.');
+    } finally {
+      setIsBiometricScanning(false);
+    }
+  };
 
   const currentDisplayPin =
     mode === 'enter-pin'
@@ -376,16 +676,26 @@ export const PinLockScreen: React.FC<PinLockScreenProps> = ({
       : '';
 
   return (
-    <div
-      id="pin-lock-overlay"
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md transition-all animate-in fade-in duration-200"
-    >
-      <div
-        id="pin-lock-card"
-        className={`relative bg-white dark:bg-[#0D1422] rounded-3xl shadow-2xl border border-slate-200/90 dark:border-slate-800 p-6 sm:p-8 w-full max-w-sm flex flex-col items-center text-center transition-transform ${
-          isShaking ? 'animate-[shake_0.4s_ease-in-out]' : ''
-        }`}
-      >
+    <AnimatePresence>
+      {isLocked && (
+        <motion.div
+          id="pin-lock-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.28, ease: 'easeInOut' }}
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-[#070B14]/95 backdrop-blur-md select-none overflow-y-auto"
+        >
+          <motion.div
+            id="pin-lock-card"
+            initial={{ opacity: 0, scale: 0.95, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: -8 }}
+            transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+            className={`relative bg-white dark:bg-[#0D1422] rounded-3xl shadow-2xl border border-slate-200/90 dark:border-slate-800 p-6 sm:p-8 w-full max-w-sm flex flex-col items-center text-center transition-transform ${
+              isShaking ? 'animate-[shake_0.4s_ease-in-out]' : ''
+            }`}
+          >
         {/* Cancel button if initial setup and can skip */}
         {!hasPinSet && onCancelSetup && mode === 'setup-pin' && (
           <button
@@ -456,9 +766,22 @@ export const PinLockScreen: React.FC<PinLockScreenProps> = ({
 
         {/* Feedback messages */}
         {error && (
-          <div className="w-full mb-3 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-400 text-xs flex items-center justify-center gap-1.5 animate-in fade-in">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
+          <div className="w-full mb-3 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-400 text-xs flex flex-col items-center justify-center gap-1.5 animate-in fade-in">
+            <div className="flex items-center justify-center gap-1.5 text-center">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+            {iframeRestrictedNotice && (
+              <a
+                href={window.location.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-100/80 dark:bg-cyan-950/60 text-cyan-800 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800/60 text-[11px] font-bold hover:underline"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>Open in New Tab to use Fingerprint</span>
+              </a>
+            )}
           </div>
         )}
         {successMsg && (
@@ -643,95 +966,63 @@ export const PinLockScreen: React.FC<PinLockScreenProps> = ({
         {(mode === 'enter-pin' || (mode === 'setup-pin' && setupStep !== 'security')) && (
           <>
             {/* PIN Dots Indicator */}
-            <div id="pin-dots-container" className="flex items-center justify-center gap-3 my-3">
-              {[0, 1, 2, 3, 4, 5].map((index) => {
-                const isFilled = index < currentDisplayPin.length;
-                const digitVal = currentDisplayPin[index];
-
-                return (
-                  <div
-                    key={index}
-                    className={`w-4 h-4 rounded-full transition-all duration-200 flex items-center justify-center ${
-                      isFilled
-                        ? 'bg-blue-600 dark:bg-cyan-400 scale-110 shadow-xs'
-                        : 'bg-slate-200 dark:bg-slate-800 border border-slate-300 dark:border-slate-700'
-                    }`}
-                  >
-                    {isFilled && revealDigits && (
-                      <span className="text-[10px] font-bold text-white dark:text-slate-950">
-                        {digitVal}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+            <PinDots currentDisplayPin={currentDisplayPin} revealDigits={revealDigits} />
 
             {/* Toggle show digits */}
             <button
               type="button"
               id="toggle-reveal-digits-btn"
               onClick={() => setRevealDigits((prev) => !prev)}
-              className="text-[11px] text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1 mb-4 cursor-pointer select-none transition-colors"
+              className="text-[11px] text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1 mb-2.5 cursor-pointer select-none transition-colors"
             >
               {revealDigits ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
               <span>{revealDigits ? 'Hide numbers' : 'Show numbers'}</span>
             </button>
 
-            {/* Numeric Keypad */}
-            <div id="pin-keypad" className="grid grid-cols-3 gap-2 sm:gap-2.5 w-full max-w-[260px] mb-2">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
-                <button
-                  key={digit}
-                  type="button"
-                  id={`keypad-digit-${digit}`}
-                  onClick={() => handleDigitPress(digit)}
-                  disabled={isSubmitting}
-                  className="h-12 sm:h-13 rounded-2xl bg-slate-50 dark:bg-[#111B2E] hover:bg-slate-100 dark:hover:bg-[#16233B] active:bg-blue-50 dark:active:bg-blue-950/50 border border-slate-200/80 dark:border-slate-800 text-slate-800 dark:text-slate-100 text-lg sm:text-xl font-bold font-['Space_Grotesk'] transition-all flex items-center justify-center active:scale-95 disabled:opacity-50 select-none shadow-2xs cursor-pointer touch-manipulation"
-                >
-                  {digit}
-                </button>
-              ))}
-
-              {/* Clear / Reset button */}
+            {/* Fingerprint Unlock Switch Key */}
+            {mode === 'enter-pin' && (
               <button
                 type="button"
-                id="keypad-clear-btn"
-                onClick={() => {
-                  setError(null);
-                  setPin('');
-                  setConfirmPin('');
-                }}
-                disabled={isSubmitting || currentDisplayPin.length === 0}
-                className="h-12 sm:h-13 rounded-2xl text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 active:bg-slate-100 dark:active:bg-slate-800 transition-all flex items-center justify-center disabled:opacity-20 select-none cursor-pointer text-xs font-semibold"
-                title="Clear input"
+                id="fingerprint-unlock-switch-btn"
+                onClick={handleFingerprintUnlock}
+                disabled={isBiometricScanning || isSubmitting}
+                className="w-full max-w-[260px] flex items-center justify-between gap-2 px-3.5 py-2 mb-3 rounded-2xl bg-slate-100/90 dark:bg-[#111B2E] hover:bg-cyan-50 dark:hover:bg-cyan-950/40 active:bg-cyan-100 dark:active:bg-cyan-900/50 border border-slate-200/90 dark:border-slate-800 hover:border-cyan-400/60 dark:hover:border-cyan-600/60 transition-all cursor-pointer group shadow-2xs select-none active:scale-[0.98]"
+                title="Unlock with your phone's fingerprint"
               >
-                Clear
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-xl bg-cyan-500/10 dark:bg-cyan-400/15 text-cyan-600 dark:text-cyan-400 flex items-center justify-center group-hover:scale-110 transition-transform">
+                    <Fingerprint className={`w-4 h-4 ${isBiometricScanning ? 'animate-pulse text-cyan-500' : ''}`} />
+                  </div>
+                  <div className="text-left">
+                    <span className="block text-xs font-bold text-slate-800 dark:text-slate-100 group-hover:text-cyan-600 dark:group-hover:text-cyan-400 transition-colors">
+                      {isBiometricScanning
+                        ? 'Scanning Fingerprint...'
+                        : biometricEnrolled
+                        ? 'Unlock with Fingerprint'
+                        : 'Enable Fingerprint Unlock'}
+                    </span>
+                    <span className="block text-[10px] text-slate-400 dark:text-slate-500 -mt-0.5">
+                      {biometricEnrolled ? 'Use phone screen lock sensor' : 'Tap to enable 1-touch unlock'}
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold text-cyan-600 dark:text-cyan-400 bg-cyan-500/10 dark:bg-cyan-400/10 px-2 py-0.5 rounded-lg border border-cyan-500/20 uppercase tracking-wider">
+                  {isBiometricScanning ? 'Scan' : 'Key'}
+                </span>
               </button>
+            )}
 
-              {/* Zero digit */}
-              <button
-                type="button"
-                id="keypad-digit-0"
-                onClick={() => handleDigitPress('0')}
-                disabled={isSubmitting}
-                className="h-12 sm:h-13 rounded-2xl bg-slate-50 dark:bg-[#111B2E] hover:bg-slate-100 dark:hover:bg-[#16233B] active:bg-blue-50 dark:active:bg-blue-950/50 border border-slate-200/80 dark:border-slate-800 text-slate-800 dark:text-slate-100 text-lg sm:text-xl font-bold font-['Space_Grotesk'] transition-all flex items-center justify-center active:scale-95 disabled:opacity-50 select-none shadow-2xs cursor-pointer touch-manipulation"
-              >
-                0
-              </button>
-
-              {/* Backspace button */}
-              <button
-                type="button"
-                id="keypad-backspace-btn"
-                onClick={handleBackspace}
-                disabled={isSubmitting || currentDisplayPin.length === 0}
-                className="h-12 sm:h-13 rounded-2xl text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 active:bg-slate-100 dark:active:bg-slate-800 transition-all flex items-center justify-center disabled:opacity-30 select-none cursor-pointer"
-                title="Delete digit"
-              >
-                <Delete className="w-5 h-5" />
-              </button>
-            </div>
+            {/* Numeric Keypad (Memoized, 0ms input latency, stable callbacks) */}
+            <PinKeypad
+              onDigitPress={handleDigitPress}
+              onClear={handleClear}
+              onBackspace={handleBackspace}
+              isSubmitting={isSubmitting}
+              hasInput={currentDisplayPin.length > 0}
+              showFingerprintKey={mode === 'enter-pin'}
+              onFingerprintPress={handleFingerprintUnlock}
+              isBiometricScanning={isBiometricScanning}
+            />
 
             {/* Footer action: Forgot PIN button */}
             {mode === 'enter-pin' && (
@@ -754,15 +1045,17 @@ export const PinLockScreen: React.FC<PinLockScreenProps> = ({
             )}
           </>
         )}
-      </div>
+          </motion.div>
 
-      <style>{`
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          20%, 60% { transform: translateX(-8px); }
-          40%, 80% { transform: translateX(8px); }
-        }
-      `}</style>
-    </div>
+          <style>{`
+            @keyframes shake {
+              0%, 100% { transform: translateX(0); }
+              20%, 60% { transform: translateX(-8px); }
+              40%, 80% { transform: translateX(8px); }
+            }
+          `}</style>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };

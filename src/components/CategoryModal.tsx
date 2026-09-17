@@ -11,6 +11,7 @@ interface CategoryModalProps {
   existingCategories: Category[];
   categoryToEdit?: Category | null;
   onDeleteCategory?: (slug: string) => Promise<void>;
+  onRequestDeleteCategory?: (category: Category) => void;
 }
 
 export const CategoryModal: React.FC<CategoryModalProps> = ({
@@ -20,6 +21,7 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
   existingCategories,
   categoryToEdit,
   onDeleteCategory,
+  onRequestDeleteCategory,
 }) => {
   const isEditing = Boolean(categoryToEdit);
   const [name, setName] = useState('');
@@ -90,22 +92,20 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
     }
   };
 
-  const handleDelete = async () => {
-    if (!categoryToEdit || !onDeleteCategory) return;
+  const handleDelete = () => {
+    if (!categoryToEdit) return;
     if (categoryToEdit.isDefault) {
       setError('Default system categories cannot be deleted');
       return;
     }
-    if (window.confirm(`Are you sure you want to delete "${categoryToEdit.name}"? Saved links will remain, but their category will be unassigned.`)) {
-      try {
-        setDeleting(true);
-        await onDeleteCategory(categoryToEdit.slug);
-        onClose();
-      } catch (err: any) {
-        setError(err.message || 'Failed to delete category');
-      } finally {
-        setDeleting(false);
-      }
+    if (onRequestDeleteCategory) {
+      onClose();
+      onRequestDeleteCategory(categoryToEdit);
+      return;
+    }
+    if (onDeleteCategory) {
+      onDeleteCategory(categoryToEdit.slug);
+      onClose();
     }
   };
 
@@ -139,7 +139,7 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
           <button
             id="close-category-modal-btn"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-[#111B2E] transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-slate-400 dark:text-slate-200 hover:text-slate-600 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-[#111B2E] transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -311,16 +311,17 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
           </div>
 
           <div className="pt-2 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-800/80">
-            {isEditing && !categoryToEdit?.isDefault && onDeleteCategory ? (
+            {isEditing && !categoryToEdit?.isDefault && (onRequestDeleteCategory || onDeleteCategory) ? (
               <button
                 type="button"
                 id="delete-category-btn"
                 disabled={deleting || saving}
                 onClick={handleDelete}
-                className="px-3 py-2 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2 text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50/80 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200/80 dark:border-rose-900/60 rounded-xl transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title={`Delete "${categoryToEdit?.name}" (Requires App Lock PIN + Forgot Password Security Answer)`}
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>{deleting ? 'Deleting...' : 'Delete'}</span>
+                <Trash2 className="w-3.5 h-3.5 text-slate-400 dark:text-slate-200" />
+                <span>Delete Category</span>
               </button>
             ) : (
               <div />

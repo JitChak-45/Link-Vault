@@ -20,6 +20,8 @@ import {
   HelpCircle,
   ChevronDown,
   Sparkles,
+  Fingerprint,
+  ExternalLink,
 } from 'lucide-react';
 import {
   auth,
@@ -35,6 +37,12 @@ import {
   DEFAULT_SECURITY_QUESTIONS,
   hashSecurityAnswer,
 } from '../utils/pinHelper';
+import {
+  checkBiometricSupport,
+  registerDeviceFingerprint,
+  removeDeviceFingerprint,
+  authenticateWithFingerprint,
+} from '../utils/biometricHelper';
 
 interface SyncModalProps {
   isOpen: boolean;
@@ -84,6 +92,75 @@ export const SyncModal: React.FC<SyncModalProps> = ({
   const [secSaving, setSecSaving] = useState(false);
   const [secSuccess, setSecSuccess] = useState<string | null>(null);
   const [secError, setSecError] = useState<string | null>(null);
+
+  // Biometrics (Fingerprint / Touch ID) state
+  const [bioSupported, setBioSupported] = useState(false);
+  const [bioEnrolled, setBioEnrolled] = useState(false);
+  const [bioIframeRestricted, setBioIframeRestricted] = useState(false);
+  const [bioLoading, setBioLoading] = useState(false);
+  const [bioMsg, setBioMsg] = useState<string | null>(null);
+  const [bioError, setBioError] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    checkBiometricSupport().then((status) => {
+      setBioSupported(status.supported);
+      setBioEnrolled(status.enrolled);
+      setBioIframeRestricted(status.iframeRestricted);
+    });
+  }, [isOpen]);
+
+  const handleRegisterBio = async () => {
+    try {
+      setBioLoading(true);
+      setBioError(null);
+      setBioMsg(null);
+      const res = await registerDeviceFingerprint('Link Vault User');
+      if (res.success) {
+        setBioEnrolled(true);
+        setBioMsg('Fingerprint registered! You can now use fingerprint unlock.');
+        setTimeout(() => setBioMsg(null), 3000);
+      } else {
+        setBioError(res.error || 'Fingerprint registration was cancelled.');
+        if (res.isIframeBlocked) {
+          setBioIframeRestricted(true);
+        }
+      }
+    } catch (err: any) {
+      setBioError(err?.message || 'Fingerprint error');
+    } finally {
+      setBioLoading(false);
+    }
+  };
+
+  const handleTestBio = async () => {
+    try {
+      setBioLoading(true);
+      setBioError(null);
+      setBioMsg(null);
+      const res = await authenticateWithFingerprint();
+      if (res.success) {
+        setBioMsg('Fingerprint verified successfully!');
+        setTimeout(() => setBioMsg(null), 3000);
+      } else {
+        setBioError(res.error || 'Fingerprint verification failed.');
+        if (res.isIframeBlocked) {
+          setBioIframeRestricted(true);
+        }
+      }
+    } catch (err: any) {
+      setBioError(err?.message || 'Verification error');
+    } finally {
+      setBioLoading(false);
+    }
+  };
+
+  const handleRemoveBio = () => {
+    removeDeviceFingerprint();
+    setBioEnrolled(false);
+    setBioMsg('Fingerprint removed from this device.');
+    setTimeout(() => setBioMsg(null), 2500);
+  };
 
 
   if (!isOpen) return null;
@@ -680,6 +757,107 @@ export const SyncModal: React.FC<SyncModalProps> = ({
               </div>
             )}
 
+            {/* Fingerprint / Biometric Unlock Card */}
+            {hasPinSet && (
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-[#111B2E]/40 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-cyan-50 dark:bg-cyan-950/60 text-cyan-600 dark:text-cyan-400 flex items-center justify-center border border-cyan-100 dark:border-cyan-900/40 shrink-0">
+                      <Fingerprint className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2 flex-wrap">
+                        <span>Fingerprint & Face Unlock</span>
+                        {bioSupported ? (
+                          bioEnrolled ? (
+                            <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/60">
+                              Enrolled & Ready
+                            </span>
+                          ) : bioIframeRestricted ? (
+                            <span className="text-[10px] font-semibold text-cyan-700 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-950/60 px-2 py-0.5 rounded-full border border-cyan-200 dark:border-cyan-800/60">
+                              Requires New Tab / Phone
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-cyan-700 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-950/60 px-2 py-0.5 rounded-full border border-cyan-200 dark:border-cyan-800/60">
+                              Device Supported
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950/60 px-2 py-0.5 rounded-full border border-amber-200 dark:border-amber-800/60">
+                            Sensor Not Detected
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {bioEnrolled
+                          ? 'Your phone fingerprint can be used to unlock the vault instantly'
+                          : 'Use the same fingerprint sensor you use to unlock your phone'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-start sm:self-auto">
+                    {bioEnrolled ? (
+                      <>
+                        <button
+                          type="button"
+                          id="test-fingerprint-btn"
+                          onClick={handleTestBio}
+                          disabled={bioLoading}
+                          className="px-2.5 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50 transition-colors shadow-2xs cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Fingerprint className="w-3.5 h-3.5" />
+                          <span>{bioLoading ? 'Scanning...' : 'Test Sensor'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          id="remove-fingerprint-btn"
+                          onClick={handleRemoveBio}
+                          disabled={bioLoading}
+                          className="px-2.5 py-1.5 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-900/60 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        id="setup-fingerprint-btn"
+                        onClick={handleRegisterBio}
+                        disabled={bioLoading}
+                        className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-semibold disabled:opacity-50 transition-colors shadow-2xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Fingerprint className="w-3.5 h-3.5" />
+                        <span>{bioLoading ? 'Scanning...' : 'Set Up Fingerprint'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {bioMsg && (
+                  <div className="p-2 text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 rounded-lg border border-emerald-200/50 dark:border-emerald-800/50">
+                    {bioMsg}
+                  </div>
+                )}
+                {bioError && (
+                  <div className="p-2.5 text-xs text-rose-700 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 rounded-lg border border-rose-200/50 dark:border-rose-800/50 flex flex-col items-start gap-2">
+                    <div>{bioError}</div>
+                    {bioIframeRestricted && (
+                      <a
+                        href={window.location.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-cyan-100/80 dark:bg-cyan-950/60 text-cyan-800 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800/60 text-[11px] font-bold hover:underline"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Open Link Vault in New Tab</span>
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Tab Switch Auto-Lock Status Banner */}
             {hasPinSet && (
               <div className="p-3 rounded-xl border border-blue-100 dark:border-blue-900/40 bg-blue-50/50 dark:bg-blue-950/20 flex items-center gap-2.5 text-xs text-blue-800 dark:text-blue-300">
@@ -722,7 +900,13 @@ export const SyncModal: React.FC<SyncModalProps> = ({
                   type="file"
                   accept=".json"
                   className="hidden"
-                  onChange={handleImportJson}
+                  onClick={() => {
+                    (window as any).__linkVaultFilePickerActive = true;
+                  }}
+                  onChange={(e) => {
+                    (window as any).__linkVaultFilePickerActive = false;
+                    handleImportJson(e);
+                  }}
                 />
               </label>
             </div>

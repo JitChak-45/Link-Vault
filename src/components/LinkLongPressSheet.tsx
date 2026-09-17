@@ -234,7 +234,7 @@ export const LinkLongPressSheet: React.FC<LinkLongPressSheetProps> = ({
               className="w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-slate-800 dark:text-slate-100 hover:bg-cyan-50/70 dark:hover:bg-cyan-950/30 active:bg-cyan-100 transition-colors text-left touch-manipulation group min-h-[50px]"
             >
               <div className="w-9 h-9 rounded-xl bg-cyan-50 dark:bg-cyan-950/50 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0 group-hover:bg-cyan-600 group-hover:text-white transition-colors">
-                <QrCode className="w-4 h-4" />
+                <QrCode className="w-4 h-4 text-slate-400 dark:text-slate-200" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Share QR Code</div>
@@ -273,7 +273,7 @@ export const LinkLongPressSheet: React.FC<LinkLongPressSheetProps> = ({
             className="w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-[#111B2E] active:bg-slate-200 transition-colors text-left touch-manipulation group min-h-[50px]"
           >
             <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-[#111B2E] text-slate-700 dark:text-slate-300 flex items-center justify-center shrink-0">
-              <Edit2 className="w-4 h-4" />
+              <Edit2 className="w-4 h-4 text-slate-400 dark:text-slate-200" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Edit Link Details</div>

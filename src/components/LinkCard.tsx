@@ -428,10 +428,10 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                 onClick={() => onShareQr(link)}
                 onTouchStart={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-cyan-400 hover:bg-blue-50/70 dark:hover:bg-blue-950/40 active:bg-blue-100 transition-colors touch-manipulation active:scale-95"
+                className="w-10 h-10 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg text-slate-400 dark:text-slate-200 hover:text-blue-600 dark:hover:text-cyan-400 hover:bg-blue-50/70 dark:hover:bg-blue-950/40 active:bg-blue-100 transition-colors touch-manipulation active:scale-95"
                 title="Share via QR Code"
               >
-                <QrCode className="w-4 h-4" />
+                <QrCode className="w-4 h-4 text-slate-400 dark:text-slate-200" />
               </button>
             )}
 
@@ -546,7 +546,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                         }}
                         className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
                       >
-                        <QrCode className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
+                        <QrCode className="w-4 h-4 text-slate-400 dark:text-slate-200" />
                         <span>Share QR Code</span>
                       </button>
                     )}
@@ -558,7 +558,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                       }}
                       className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
                     >
-                      <Edit2 className="w-4 h-4" />
+                      <Edit2 className="w-4 h-4 text-slate-400 dark:text-slate-200" />
                       <span>Edit</span>
                     </button>
                     <button
@@ -738,10 +738,10 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                   onClick={() => onShareQr(link)}
                   onTouchStart={(e) => e.stopPropagation()}
                   onMouseDown={(e) => e.stopPropagation()}
-                  className="w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg bg-white/90 hover:bg-white dark:bg-[#0D1422]/90 dark:hover:bg-[#111B2E] text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-cyan-400 shadow-xs transition-colors touch-manipulation active:scale-95"
+                  className="w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg bg-white/90 hover:bg-white dark:bg-[#0D1422]/90 dark:hover:bg-[#111B2E] text-slate-400 dark:text-slate-200 hover:text-blue-600 dark:hover:text-cyan-400 shadow-xs transition-colors touch-manipulation active:scale-95"
                   title="Share via QR Code"
                 >
-                  <QrCode className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                  <QrCode className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-slate-400 dark:text-slate-200" />
                 </button>
               )}
 
@@ -867,10 +867,10 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                     onClick={() => onShareQr(link)}
                     onTouchStart={(e) => e.stopPropagation()}
                     onMouseDown={(e) => e.stopPropagation()}
-                    className="w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-cyan-400 hover:bg-blue-50/70 dark:hover:bg-blue-950/40 transition-colors touch-manipulation active:scale-95"
+                    className="w-9 h-9 sm:w-8 sm:h-8 flex items-center justify-center rounded-xl sm:rounded-lg text-slate-400 dark:text-slate-200 hover:text-blue-600 dark:hover:text-cyan-400 hover:bg-blue-50/70 dark:hover:bg-blue-950/40 transition-colors touch-manipulation active:scale-95"
                     title="Share via QR Code"
                   >
-                    <QrCode className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                    <QrCode className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-slate-400 dark:text-slate-200" />
                   </button>
                 )}
 
@@ -932,7 +932,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                             }}
                             className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
                           >
-                            <QrCode className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
+                            <QrCode className="w-4 h-4 text-slate-400 dark:text-slate-200" />
                             <span>Share QR Code</span>
                           </button>
                         )}
@@ -944,7 +944,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                           }}
                           className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
                         >
-                          <Edit2 className="w-4 h-4" />
+                          <Edit2 className="w-4 h-4 text-slate-400 dark:text-slate-200" />
                           <span>Edit</span>
                         </button>
                         <button

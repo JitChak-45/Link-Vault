@@ -10,6 +10,7 @@ export const DEFAULT_CATEGORIES: Category[] = [
     description: 'Movies, streaming, music, gaming, podcasts & leisure',
     isDefault: true,
     createdAt: 1,
+    order: 0,
   },
   {
     id: 'study',
@@ -20,6 +21,7 @@ export const DEFAULT_CATEGORIES: Category[] = [
     description: 'Courses, textbooks, research papers, tutorials & notes',
     isDefault: true,
     createdAt: 2,
+    order: 1,
   },
   {
     id: 'information',
@@ -30,6 +32,7 @@ export const DEFAULT_CATEGORIES: Category[] = [
     description: 'News, Wikipedia, documentation, reference & tech updates',
     isDefault: true,
     createdAt: 3,
+    order: 2,
   },
   {
     id: 'work',
@@ -40,6 +43,7 @@ export const DEFAULT_CATEGORIES: Category[] = [
     description: 'Productivity apps, repositories, dashboards & business',
     isDefault: true,
     createdAt: 4,
+    order: 3,
   },
   {
     id: 'reading',
@@ -50,6 +54,7 @@ export const DEFAULT_CATEGORIES: Category[] = [
     description: 'Long-form reads, essays, newsletters & personal archive',
     isDefault: true,
     createdAt: 5,
+    order: 4,
   },
 ];
 

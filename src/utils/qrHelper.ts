@@ -17,6 +17,8 @@ import {
   where,
   getDocs,
   limit,
+  auth,
+  signInAnonymously,
 } from '../firebase';
 
 /**
@@ -169,16 +171,36 @@ export async function createCloudShareBundle(payload: QrSharePayload): Promise<C
         : 0
       : 1;
 
+  // Ensure user has auth context (anonymous fallback if not logged in)
+  if (!auth.currentUser) {
+    try {
+      await signInAnonymously(auth);
+    } catch (authErr) {
+      console.warn('Anonymous auth initialization:', authErr);
+    }
+  }
+
+  const bundleData = {
+    id: shareId,
+    shortCode,
+    categoryName,
+    itemCount,
+    payload: cleaned,
+    createdAt: Date.now(),
+  };
+
   try {
+    // 1. Save primary doc under shareId
     const bundleRef = doc(db, 'shared_bundles', shareId);
-    await setDoc(bundleRef, {
-      id: shareId,
-      shortCode,
-      categoryName,
-      itemCount,
-      payload: cleaned,
-      createdAt: Date.now(),
-    });
+    await setDoc(bundleRef, bundleData);
+
+    // 2. Also save by 6-digit shortCode for instant O(1) doc lookup
+    try {
+      const codeRef = doc(db, 'shared_bundles', shortCode);
+      await setDoc(codeRef, bundleData);
+    } catch {
+      // Non-blocking if replica write fails
+    }
   } catch (err) {
     console.error('Failed to create cloud share bundle in Firestore:', err);
     throw err;
@@ -204,23 +226,25 @@ export async function createCloudShareBundle(payload: QrSharePayload): Promise<C
 export async function fetchCloudShareBundle(shareIdOrCode: string): Promise<QrSharePayload | null> {
   if (!shareIdOrCode) return null;
 
-  // Extract ID or code from potential URL patterns like #s=xxx or ?s=xxx or #share=xxx
   let cleanKey = shareIdOrCode.trim();
-  const hashMatch = cleanKey.match(/[#?&]s=([a-zA-Z0-9_-]+)/);
-  if (hashMatch) {
-    cleanKey = hashMatch[1];
+
+  // Extract s_ bundle ID if present anywhere in the string/URL (e.g. #s=s_abc, #s_abc, ?s=s_abc)
+  const sMatch = cleanKey.match(/(s_[a-zA-Z0-9_-]+)/);
+  if (sMatch) {
+    cleanKey = sMatch[1];
   } else {
-    const shareMatch = cleanKey.match(/[#?&]share=([a-zA-Z0-9_-]+)/);
-    if (shareMatch) {
-      cleanKey = shareMatch[1];
+    const hashMatch = cleanKey.match(/[#?&](?:s|share)=([a-zA-Z0-9_-]+)/i);
+    if (hashMatch) {
+      cleanKey = hashMatch[1];
     }
   }
 
-  // Remove spaces or hyphens from 6-digit code (e.g. "849 201" -> "849201")
-  const strippedCode = cleanKey.replace(/[\s-]+/g, '');
+  // Check for 6-digit quick code (e.g. "849 201" or "849201")
+  const codeMatch = cleanKey.match(/\b(\d{3})\s*(\d{3})\b/);
+  const strippedCode = codeMatch ? `${codeMatch[1]}${codeMatch[2]}` : cleanKey.replace(/[\s-]+/g, '');
 
   try {
-    // 1. Try direct doc ID lookup
+    // 1. Try direct doc ID lookup by cleanKey
     const docRef = doc(db, 'shared_bundles', cleanKey);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
@@ -233,37 +257,34 @@ export async function fetchCloudShareBundle(shareIdOrCode: string): Promise<QrSh
     console.warn('Direct doc ID lookup failed:', e);
   }
 
-  // 2. Try looking up by 6-digit shortCode
-  try {
-    const q = query(
-      collection(db, 'shared_bundles'),
-      where('shortCode', '==', strippedCode),
-      limit(1)
-    );
-    const qSnap = await getDocs(q);
-    if (!qSnap.empty) {
-      const data = qSnap.docs[0].data();
-      if (data && data.payload) {
-        return data.payload as QrSharePayload;
-      }
-    }
-  } catch (e) {
-    console.warn('ShortCode query failed:', e);
-  }
-
-  // 3. Try strippedCode directly as doc ID
-  if (strippedCode !== cleanKey) {
+  // 2. Try looking up by 6-digit shortCode query
+  if (/^\d{6}$/.test(strippedCode)) {
     try {
-      const docRef = doc(db, 'shared_bundles', strippedCode);
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        const data = snap.data();
+      // First try direct doc fetch by 6-digit code ID (dual indexed)
+      const directCodeRef = doc(db, 'shared_bundles', strippedCode);
+      const directSnap = await getDoc(directCodeRef);
+      if (directSnap.exists()) {
+        const data = directSnap.data();
         if (data && data.payload) {
           return data.payload as QrSharePayload;
         }
       }
-    } catch {
-      // ignore
+
+      // Query fallback
+      const q = query(
+        collection(db, 'shared_bundles'),
+        where('shortCode', '==', strippedCode),
+        limit(1)
+      );
+      const qSnap = await getDocs(q);
+      if (!qSnap.empty) {
+        const data = qSnap.docs[0].data();
+        if (data && data.payload) {
+          return data.payload as QrSharePayload;
+        }
+      }
+    } catch (e) {
+      console.warn('ShortCode query failed:', e);
     }
   }
 
@@ -606,13 +627,16 @@ export async function decodeShareDataAsync(input: string): Promise<QrSharePayloa
 
   const trimmed = input.trim();
 
-  // 1. Check if input is a cloud share link (#s=, ?s=) or short code
+  // 1. Check if input is a cloud share link (#s=, ?s=, #s_, s_) or short code
   if (
     trimmed.includes('#s=') ||
     trimmed.includes('?s=') ||
     trimmed.includes('&s=') ||
     trimmed.includes('#share=') ||
+    trimmed.includes('#s_') ||
+    trimmed.includes('/s_') ||
     trimmed.startsWith('s_') ||
+    /s_[a-zA-Z0-9_-]+/.test(trimmed) ||
     /^\d{6}$/.test(trimmed.replace(/[\s-]+/g, ''))
   ) {
     try {

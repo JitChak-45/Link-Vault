@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { flushSync } from 'react-dom';
+import { motion, AnimatePresence, Reorder } from 'motion/react';
 import {
   Search,
   Plus,
@@ -24,6 +26,9 @@ import {
   Sun,
   Moon,
   Loader2,
+  GripVertical,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   auth,
@@ -59,6 +64,7 @@ import { OpenLinkModal } from './components/OpenLinkModal';
 import { QrShareModal } from './components/QrShareModal';
 import { QrScannerModal } from './components/QrScannerModal';
 import { ImportSharedModal } from './components/ImportSharedModal';
+import { DeleteCategoryModal } from './components/DeleteCategoryModal';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -79,6 +85,8 @@ export default function App() {
   const [editingLink, setEditingLink] = useState<SavedLink | null>(null);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [isDeleteCategoryModalOpen, setIsDeleteCategoryModalOpen] = useState(false);
+  const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [deleteConfirmationId, setDeleteConfirmationId] = useState<string | null>(null);
 
@@ -92,6 +100,14 @@ export default function App() {
   const [isOpenLinkModalOpen, setIsOpenLinkModalOpen] = useState(false);
   const [linkToOpen, setLinkToOpen] = useState<SavedLink | null>(null);
   const [importSuccessMessage, setImportSuccessMessage] = useState<string | null>(null);
+
+  // Category Scroll & Reorder State
+  const categoriesScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollRafRef = useRef<number | null>(null);
+  const autoScrollSpeedRef = useRef<number>(0);
+  const categoriesRef = useRef<Category[]>(categories);
+  categoriesRef.current = categories;
+  const [activeDraggingCatSlug, setActiveDraggingCatSlug] = useState<string | null>(null);
 
   // 6-digit PIN Security Protection
   const [storedPinHash, setStoredPinHash] = useState<string | null>(() => {
@@ -111,32 +127,57 @@ export default function App() {
     return typeof window !== 'undefined' ? localStorage.getItem('link_vault_sec_answer_hash') : null;
   });
 
-  // Auto-lock vault on tab switch or when mobile app is hidden/switched
+  // Auto-lock vault immediately on tab switch or when mobile app is hidden/switched
   useEffect(() => {
     if (!hasPinSet) return;
 
-    const handleVisibilityChange = () => {
-      // Whenever the user switches away from the tab or minimizes the app, secure the vault
-      if (document.visibilityState === 'hidden') {
+    const lockVaultImmediately = () => {
+      if ((window as any).__linkVaultFilePickerActive) return;
+      // Synchronously flush state update so the PIN Lock Screen mounts immediately
+      flushSync(() => {
         setIsLocked(true);
+      });
+      window.scrollTo(0, 0);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        lockVaultImmediately();
       }
     };
 
+    const handlePageHide = () => {
+      lockVaultImmediately();
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
+
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
     };
   }, [hasPinSet]);
 
-  // Futuristic Day / Night Theme: Auto-selects from local device time (6:00 AM - 5:59 PM: Light, 6:00 PM - 5:59 AM: Dark)
+  // Device time helper: 6:00 PM (18:00) to 6:00 AM (06:00) -> Night Mode ('dark'); 6:00 AM to 6:00 PM -> Day Mode ('light')
+  const getThemeByDeviceTime = (): 'light' | 'dark' => {
+    if (typeof window === 'undefined') return 'light';
+    const hour = new Date().getHours();
+    return hour >= 18 || hour < 6 ? 'dark' : 'light';
+  };
+
+  const [isManualThemeActive, setIsManualThemeActive] = useState<boolean>(() => {
+    return typeof window !== 'undefined' && localStorage.getItem('link_vault_theme_manual') === 'true';
+  });
+
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window === 'undefined') return 'light';
+    const isManual = localStorage.getItem('link_vault_theme_manual') === 'true';
     const saved = localStorage.getItem('link_vault_theme');
-    if (saved === 'light' || saved === 'dark') {
+    if (isManual && (saved === 'light' || saved === 'dark')) {
       return saved;
     }
-    const hour = new Date().getHours();
-    return hour >= 6 && hour < 18 ? 'light' : 'dark';
+    return getThemeByDeviceTime();
   });
 
   useEffect(() => {
@@ -157,7 +198,25 @@ export default function App() {
     }
   }, [theme]);
 
+  // Periodic sync with local device time (Night Mode 6 PM - 6 AM; Day Mode 6 AM - 6 PM)
+  useEffect(() => {
+    const syncThemeWithLocalTime = () => {
+      if (!isManualThemeActive) {
+        const expected = getThemeByDeviceTime();
+        setTheme(expected);
+      }
+    };
+
+    syncThemeWithLocalTime();
+    const interval = setInterval(syncThemeWithLocalTime, 20000);
+    return () => clearInterval(interval);
+  }, [isManualThemeActive]);
+
   const toggleTheme = () => {
+    setIsManualThemeActive(true);
+    try {
+      localStorage.setItem('link_vault_theme_manual', 'true');
+    } catch {}
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
@@ -173,6 +232,7 @@ export default function App() {
       const hasShareIndicator =
         fullUrl.includes('#s=') ||
         fullUrl.includes('?s=') ||
+        fullUrl.includes('&s=') ||
         fullUrl.includes('#share=') ||
         fullUrl.includes('?share=') ||
         fullUrl.includes('#import=') ||
@@ -181,13 +241,15 @@ export default function App() {
         fullUrl.includes('?i=') ||
         fullUrl.includes('#code=') ||
         fullUrl.includes('?code=') ||
-        hash.startsWith('#s_');
+        fullUrl.includes('#s_') ||
+        hash.startsWith('#s_') ||
+        /s_[a-zA-Z0-9_-]+/.test(fullUrl);
 
       if (hasShareIndicator) {
         setIsImportLoading(true);
         const timeoutId = setTimeout(() => {
           setIsImportLoading(false);
-        }, 4000);
+        }, 5000);
 
         try {
           const decoded = (await decodeShareDataAsync(fullUrl)) || decodeShareData(fullUrl);
@@ -199,6 +261,11 @@ export default function App() {
             } catch {
               // ignore
             }
+          } else {
+            setImportSuccessMessage(
+              'Shared bundle link was incomplete or expired. You can also use the 6-digit Quick Code via Scan QR.'
+            );
+            setTimeout(() => setImportSuccessMessage(null), 6000);
           }
         } catch (err) {
           console.warn('Failed to parse URL import payload:', err);
@@ -280,7 +347,12 @@ export default function App() {
           }
         } else {
           const loadedCategories = snapshot.docs.map((d) => d.data() as Category);
-          loadedCategories.sort((a, b) => a.createdAt - b.createdAt);
+          loadedCategories.sort((a, b) => {
+            if (typeof a.order === 'number' && typeof b.order === 'number') {
+              return a.order - b.order;
+            }
+            return a.createdAt - b.createdAt;
+          });
           setCategories(loadedCategories);
           saveLocalCategories(loadedCategories);
         }
@@ -503,6 +575,17 @@ export default function App() {
     setIsSyncing(false);
   };
 
+  const handleRequestDeleteCategory = (category: Category) => {
+    setCategoryToDelete(category);
+    setIsDeleteCategoryModalOpen(true);
+  };
+
+  const handleConfirmDeleteCategory = async (categorySlug: string) => {
+    await handleDeleteCategory(categorySlug);
+    setCategoryToDelete(null);
+    setIsDeleteCategoryModalOpen(false);
+  };
+
   const handleToggleCategoryPrivacy = async (categorySlug: string) => {
     const target = categories.find((c) => c.slug === categorySlug);
     if (!target) return;
@@ -523,6 +606,79 @@ export default function App() {
     }
     setIsSyncing(false);
   };
+
+  // Category Auto-Scroll & Real-Time Reorder Handlers
+  const startAutoScroll = () => {
+    if (autoScrollRafRef.current !== null) return;
+    const loop = () => {
+      if (categoriesScrollRef.current && autoScrollSpeedRef.current !== 0) {
+        categoriesScrollRef.current.scrollLeft += autoScrollSpeedRef.current;
+      }
+      autoScrollRafRef.current = requestAnimationFrame(loop);
+    };
+    autoScrollRafRef.current = requestAnimationFrame(loop);
+  };
+
+  const stopAutoScroll = () => {
+    autoScrollSpeedRef.current = 0;
+    if (autoScrollRafRef.current !== null) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+    setActiveDraggingCatSlug(null);
+  };
+
+  const scrollCategories = (direction: 'left' | 'right') => {
+    if (categoriesScrollRef.current) {
+      const scrollAmount = direction === 'left' ? -280 : 280;
+      categoriesScrollRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
+    }
+  };
+
+  // Reorder list handler (called in real time by Reorder.Group for physical fluid motion)
+  const handleReorderCategoriesList = (newCategories: Category[]) => {
+    const reindexed = newCategories.map((cat, idx) => ({
+      ...cat,
+      order: idx,
+    }));
+    setCategories(reindexed);
+    saveLocalCategories(reindexed);
+  };
+
+  // Commit final category order to cloud when drag gesture finishes
+  const commitCategoryOrderToCloud = (finalCategories: Category[]) => {
+    if (!user) return;
+    try {
+      const batch = writeBatch(db);
+      finalCategories.forEach((cat, idx) => {
+        const catRef = doc(db, 'users', user.uid, 'categories', cat.slug);
+        batch.set(catRef, { order: idx }, { merge: true });
+      });
+      batch.commit().catch((err) => {
+        console.error('Failed to sync category order to Firestore:', err);
+      });
+    } catch (err) {
+      console.error('Failed to batch update category order in Firestore:', err);
+    }
+  };
+
+  // Safety cleanup for category drag auto-scroll
+  useEffect(() => {
+    const handlePointerUp = () => {
+      if (autoScrollRafRef.current !== null) {
+        stopAutoScroll();
+      }
+    };
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('touchend', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('touchend', handlePointerUp);
+      if (autoScrollRafRef.current !== null) {
+        cancelAnimationFrame(autoScrollRafRef.current);
+      }
+    };
+  }, []);
 
   // QR Share and Launch Option Handlers
   const handleOpenQrShareForCategory = (category: Category) => {
@@ -865,6 +1021,7 @@ export default function App() {
 
   const handleLockVault = () => {
     setIsLocked(true);
+    window.scrollTo(0, 0);
   };
 
   const handleChangePin = () => {
@@ -961,13 +1118,18 @@ export default function App() {
     <div
       className="min-h-screen bg-[#F3F7FC] dark:bg-[#070B14] text-[#0F172A] dark:text-[#F1F5F9] flex flex-col font-sans antialiased selection:bg-cyan-500/20 selection:text-cyan-700 dark:selection:text-cyan-300 transition-colors duration-300 relative overflow-x-hidden"
     >
-      {/* Main Vault Content (blurred & non-interactive only when PIN locked) */}
-      <div
-        id="vault-main-content"
-        className={`flex flex-col flex-1 transition-all duration-300 ${
-          hasPinSet && isLocked ? 'filter blur-xl opacity-30 select-none pointer-events-none' : ''
-        }`}
-      >
+      {/* Main Vault Content (smoothly animated with framer-motion when toggling isLocked) */}
+      <AnimatePresence mode="wait">
+        {!isLocked && (
+          <motion.div
+            key="vault-main-content"
+            id="vault-main-content"
+            initial={{ opacity: 0, y: 8, filter: 'blur(3px)' }}
+            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, y: -8, filter: 'blur(3px)' }}
+            transition={{ duration: 0.32, ease: 'easeInOut' }}
+            className="flex-col flex-1 flex"
+          >
         {/* Subtle Futuristic Ambient Glow (CSS only, high performance) */}
         <div className="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
         <div className="absolute -top-40 -left-40 w-96 h-96 rounded-full bg-cyan-400/5 dark:bg-cyan-500/10 blur-3xl pointer-events-none" />
@@ -1149,30 +1311,58 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full flex flex-col gap-6 relative z-10">
         {/* Category Filter Bar */}
         <section id="category-filter-section" className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-              Categories
-            </h2>
-            <button
-              id="new-category-btn"
-              onClick={() => {
-                setEditingCategory(null);
-                setIsCategoryModalOpen(true);
-              }}
-              className="text-xs text-blue-600 dark:text-cyan-400 hover:text-blue-800 dark:hover:text-cyan-300 font-medium inline-flex items-center gap-1 transition-colors cursor-pointer"
-            >
-              <FolderPlus className="w-3.5 h-3.5" />
-              <span>New Category</span>
-            </button>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                Categories
+              </h2>
+              <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                ({categories.length})
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => scrollCategories('left')}
+                className="p-1.5 rounded-lg border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-[#0D1422] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition-colors cursor-pointer"
+                title="Scroll categories left"
+                aria-label="Scroll categories left"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollCategories('right')}
+                className="p-1.5 rounded-lg border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-[#0D1422] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition-colors cursor-pointer"
+                title="Scroll categories right"
+                aria-label="Scroll categories right"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+              <button
+                id="new-category-btn"
+                onClick={() => {
+                  setEditingCategory(null);
+                  setIsCategoryModalOpen(true);
+                }}
+                className="text-xs text-blue-600 dark:text-cyan-400 hover:text-blue-800 dark:hover:text-cyan-300 font-medium inline-flex items-center gap-1 transition-colors cursor-pointer pl-1.5"
+              >
+                <FolderPlus className="w-3.5 h-3.5" />
+                <span>New Category</span>
+              </button>
+            </div>
           </div>
 
-          {/* Category Pills List */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin">
-            {/* All Links Pill */}
+          {/* Category Pills List with Fluid Tab Drag-and-Drop & Auto Horizontal Scrolling */}
+          <div
+            ref={categoriesScrollRef}
+            className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin select-none relative"
+          >
+            {/* All Links Pill (Static) */}
             <button
               id="filter-category-all-btn"
               onClick={() => setSelectedCategory('all')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+              className={`shrink-0 flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
                 selectedCategory === 'all'
                   ? 'bg-slate-900 dark:bg-blue-600 text-white shadow-xs'
                   : 'bg-white dark:bg-[#0D1422] border border-slate-200/90 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-[#111B2E]'
@@ -1191,11 +1381,11 @@ export default function App() {
               </span>
             </button>
 
-            {/* Starred / Favorites */}
+            {/* Starred / Favorites (Static) */}
             <button
               id="filter-category-favorites-btn"
               onClick={() => setSelectedCategory('favorites')}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+              className={`shrink-0 flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
                 selectedCategory === 'favorites'
                   ? 'bg-amber-500 text-white shadow-xs'
                   : 'bg-white dark:bg-[#0D1422] border border-slate-200/90 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-[#111B2E]'
@@ -1218,91 +1408,183 @@ export default function App() {
               </span>
             </button>
 
-            {/* Categories */}
-            {categories.map((cat) => {
-              const isSelected = selectedCategory === cat.slug;
-              const count = categoryCounts[cat.slug] || 0;
-              return (
-                <div
-                  key={cat.slug}
-                  className={`relative group shrink-0 flex items-center rounded-xl transition-all border ${
-                    isSelected
-                      ? 'text-white shadow-xs border-transparent'
-                      : 'bg-white dark:bg-[#0D1422] border-slate-200/90 dark:border-slate-800 text-slate-700 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-[#111B2E]'
-                  }`}
-                  style={isSelected ? { backgroundColor: cat.color } : undefined}
-                >
-                  <button
-                    type="button"
-                    id={`filter-category-${cat.slug}-btn`}
-                    onClick={() => setSelectedCategory(cat.slug)}
-                    className="flex items-center gap-2 pl-3.5 pr-2 py-2 text-xs font-semibold whitespace-nowrap cursor-pointer"
+            {/* Reorderable Custom Category Tabs (Reorder.Group for genuine physical tab movement) */}
+            <Reorder.Group
+              as="div"
+              axis="x"
+              values={categories}
+              onReorder={handleReorderCategoriesList}
+              className="flex items-center gap-2 shrink-0"
+            >
+              {categories.map((cat) => {
+                const isSelected = selectedCategory === cat.slug;
+                const count = categoryCounts[cat.slug] || 0;
+                const isDraggingThis = activeDraggingCatSlug === cat.slug;
+
+                return (
+                  <Reorder.Item
+                    key={cat.slug}
+                    value={cat}
+                    as="div"
+                    dragListener={true}
+                    whileDrag={{
+                      scale: 1.05,
+                      zIndex: 60,
+                      cursor: 'grabbing',
+                      boxShadow:
+                        theme === 'dark'
+                          ? '0 16px 36px -4px rgba(0, 0, 0, 0.9), 0 0 0 2px rgba(6, 182, 212, 0.9)'
+                          : '0 16px 36px -4px rgba(0, 0, 0, 0.25), 0 0 0 2px rgba(6, 182, 212, 0.9)',
+                    }}
+                    transition={{ type: 'spring', damping: 28, stiffness: 380 }}
+                    onDragStart={() => {
+                      setActiveDraggingCatSlug(cat.slug);
+                      startAutoScroll();
+                    }}
+                    onDrag={(event, info) => {
+                      const container = categoriesScrollRef.current;
+                      if (!container) return;
+                      const rect = container.getBoundingClientRect();
+                      const x = info.point.x;
+                      const threshold = 120;
+
+                      // Auto-scroll when dragged near left edge (towards start / All Links / Starred)
+                      if (x < rect.left + threshold) {
+                        const dist = (rect.left + threshold) - x;
+                        const factor = Math.min(1.8, Math.max(0.3, dist / threshold));
+                        autoScrollSpeedRef.current = -Math.round(18 * factor);
+                      }
+                      // Auto-scroll when dragged near right edge (towards end)
+                      else if (x > rect.right - threshold) {
+                        const dist = x - (rect.right - threshold);
+                        const factor = Math.min(1.8, Math.max(0.3, dist / threshold));
+                        autoScrollSpeedRef.current = Math.round(18 * factor);
+                      } else {
+                        autoScrollSpeedRef.current = 0;
+                      }
+                    }}
+                    onDragEnd={() => {
+                      stopAutoScroll();
+                      commitCategoryOrderToCloud(categoriesRef.current);
+                    }}
+                    className={`relative group shrink-0 flex items-center rounded-xl transition-colors border select-none ${
+                      isSelected
+                        ? 'text-white shadow-xs border-transparent'
+                        : 'bg-white dark:bg-[#0D1422] border-slate-200/90 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-[#111B2E]'
+                    } ${isDraggingThis ? 'opacity-95' : 'opacity-100'}`}
+                    style={isSelected ? { backgroundColor: cat.color } : undefined}
                   >
-                    <CategoryIcon
-                      name={cat.icon}
-                      color={isSelected ? '#ffffff' : cat.color}
-                      className="w-3.5 h-3.5"
-                    />
-                    <span>{cat.name}</span>
-                    {cat.hideFromAll && (
+                    {/* Drag Grip Handle */}
+                    <div
+                      className={`pl-2.5 pr-0.5 py-2 cursor-grab active:cursor-grabbing flex items-center shrink-0 transition-colors ${
+                        isSelected
+                          ? 'text-white/80 hover:text-white'
+                          : 'text-slate-400 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                      }`}
+                      title="Drag tab forward or backward to reorder"
+                      aria-label={`Drag to reorder ${cat.name}`}
+                    >
+                      <GripVertical className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 transition-opacity" />
+                    </div>
+
+                    {/* Category Filter Selection Button */}
+                    <button
+                      type="button"
+                      id={`filter-category-${cat.slug}-btn`}
+                      onClick={() => setSelectedCategory(cat.slug)}
+                      className="flex items-center gap-1.5 pr-2 py-2 text-xs font-semibold whitespace-nowrap cursor-pointer select-none"
+                    >
+                      <CategoryIcon
+                        name={cat.icon}
+                        color={isSelected ? '#ffffff' : cat.color}
+                        className="w-3.5 h-3.5"
+                      />
+                      <span>{cat.name}</span>
+                      {cat.hideFromAll && (
+                        <span
+                          title="Private category (hidden from All Links)"
+                          className={`p-0.5 rounded ${
+                            isSelected ? 'bg-black/20 text-white' : 'text-blue-600 dark:text-cyan-400 bg-blue-50 dark:bg-blue-950/60'
+                          }`}
+                        >
+                          <EyeOff className="w-3 h-3" />
+                        </span>
+                      )}
                       <span
-                        title="Private category (hidden from All Links)"
-                        className={`p-0.5 rounded ${
-                          isSelected ? 'bg-black/20 text-white' : 'text-blue-600 dark:text-cyan-400 bg-blue-50 dark:bg-blue-950/60'
+                        className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                          isSelected
+                            ? 'bg-black/20 text-white'
+                            : 'bg-slate-100 dark:bg-[#111B2E] text-slate-600 dark:text-slate-300'
                         }`}
                       >
-                        <EyeOff className="w-3 h-3" />
+                        {count}
                       </span>
-                    )}
-                    <span
-                      className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                    </button>
+
+                    {/* Edit Category Button - Always clearly visible in night mode */}
+                    <button
+                      type="button"
+                      id={`edit-category-pill-${cat.slug}-btn`}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingCategory(cat);
+                        setIsCategoryModalOpen(true);
+                      }}
+                      className={`p-1.5 mr-1 rounded-lg transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-black/20 text-white'
-                          : 'bg-slate-100 dark:bg-[#111B2E] text-slate-600 dark:text-slate-300'
+                          ? 'text-white bg-black/25 hover:bg-black/40 border border-white/25 shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-200 bg-slate-100 dark:bg-slate-800/90 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/90 dark:border-slate-700/80 hover:text-blue-600 dark:hover:text-cyan-300 shadow-2xs'
                       }`}
+                      title={`Edit ${cat.name} name, icon, color & privacy`}
+                      aria-label={`Edit ${cat.name}`}
                     >
-                      {count}
-                    </span>
-                  </button>
+                      <Pencil className="w-3.5 h-3.5 text-slate-400 dark:text-slate-200" />
+                    </button>
 
-                  {/* Edit Category Button */}
-                  <button
-                    type="button"
-                    id={`edit-category-pill-${cat.slug}-btn`}
-                    onClick={() => {
-                      setEditingCategory(cat);
-                      setIsCategoryModalOpen(true);
-                    }}
-                    className={`p-1.5 mr-0.5 rounded-lg transition-opacity ${
-                      isSelected
-                        ? 'opacity-80 hover:opacity-100 hover:bg-black/20 text-white'
-                        : 'opacity-0 group-hover:opacity-100 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200'
-                    }`}
-                    title={`Edit ${cat.name} settings and privacy`}
-                  >
-                    <Pencil className="w-3 h-3" />
-                  </button>
+                    {/* Share Category via QR Code - Always clearly visible in night mode */}
+                    <button
+                      type="button"
+                      id={`share-category-qr-${cat.slug}-btn`}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenQrShareForCategory(cat);
+                      }}
+                      className={`p-1.5 mr-1 rounded-lg transition-all cursor-pointer ${
+                        isSelected
+                          ? 'text-white bg-black/25 hover:bg-black/40 border border-white/25 shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-200 bg-slate-100 dark:bg-slate-800/90 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/90 dark:border-slate-700/80 hover:text-emerald-600 dark:hover:text-emerald-400 shadow-2xs'
+                      }`}
+                      title={`Share ${cat.name} (${count} links) via QR Code`}
+                      aria-label={`Share ${cat.name} QR Code`}
+                    >
+                      <QrCode className="w-3.5 h-3.5 text-slate-400 dark:text-slate-200" />
+                    </button>
 
-                  {/* Share Category via QR Code */}
-                  <button
-                    type="button"
-                    id={`share-category-qr-${cat.slug}-btn`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenQrShareForCategory(cat);
-                    }}
-                    className={`p-1.5 mr-1.5 rounded-lg transition-opacity ${
-                      isSelected
-                        ? 'opacity-80 hover:opacity-100 hover:bg-black/20 text-white'
-                        : 'opacity-0 group-hover:opacity-100 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-cyan-400'
-                    }`}
-                    title={`Share ${cat.name} (${count} links) via QR Code`}
-                  >
-                    <QrCode className="w-3 h-3" />
-                  </button>
-                </div>
-              );
-            })}
+                    {/* Delete Category Button - Security Gated by PIN + Security Question */}
+                    <button
+                      type="button"
+                      id={`delete-category-pill-${cat.slug}-btn`}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRequestDeleteCategory(cat);
+                      }}
+                      className={`p-1.5 mr-1.5 rounded-lg transition-all cursor-pointer ${
+                        isSelected
+                          ? 'text-white bg-black/25 hover:bg-black/40 border border-white/25 shadow-2xs hover:text-rose-200'
+                          : 'text-slate-600 dark:text-slate-200 bg-slate-100 dark:bg-slate-800/90 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-slate-200/90 dark:border-slate-700/80 hover:text-rose-600 dark:hover:text-rose-400 shadow-2xs'
+                      }`}
+                      title={`Delete "${cat.name}" category (Requires App Lock PIN + Forgot Password Security Answer)`}
+                      aria-label={`Delete ${cat.name}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-slate-400 dark:text-slate-200" />
+                    </button>
+                  </Reorder.Item>
+                );
+              })}
+            </Reorder.Group>
           </div>
         </section>
 
@@ -1639,7 +1921,9 @@ export default function App() {
           </p>
         </div>
       </footer>
-      </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Delete Confirmation Modal */}
       {deleteConfirmationId && (
@@ -1712,6 +1996,34 @@ export default function App() {
         existingCategories={categories}
         categoryToEdit={editingCategory}
         onDeleteCategory={handleDeleteCategory}
+        onRequestDeleteCategory={handleRequestDeleteCategory}
+      />
+
+      {/* Delete Category Security Gate Modal (Requires App Lock PIN + Forgot Password Security Answer) */}
+      <DeleteCategoryModal
+        isOpen={isDeleteCategoryModalOpen}
+        onClose={() => {
+          setIsDeleteCategoryModalOpen(false);
+          setCategoryToDelete(null);
+        }}
+        category={categoryToDelete}
+        linkCount={
+          categoryToDelete
+            ? links.filter((l) => isLinkInCategory(l.categorySlug, categoryToDelete)).length
+            : 0
+        }
+        onConfirmDelete={handleConfirmDeleteCategory}
+        hasPinSet={hasPinSet}
+        storedPinHash={storedPinHash}
+        securityQuestion={securityQuestion}
+        securityAnswerHash={securityAnswerHash}
+        onOpenPinSetup={() => {
+          setIsLocked(true);
+        }}
+        onOpenSecuritySettings={() => {
+          setIsSyncModalOpen(true);
+        }}
+        onUpdateSecurityQuestion={handleUpdateSecurityQuestion}
       />
 
       {/* Multi-Device Cloud Sync Modal */}
@@ -1763,6 +2075,13 @@ export default function App() {
 
       {/* Generate & Display QR Code Modal */}
       <QrShareModal
+        key={
+          qrShareCategory
+            ? `cat-${qrShareCategory.slug || qrShareCategory.id || qrShareCategory.name}`
+            : qrShareLink
+            ? `link-${qrShareLink.id}`
+            : 'empty-qr'
+        }
         isOpen={isQrShareModalOpen}
         category={qrShareCategory}
         categoryLinks={

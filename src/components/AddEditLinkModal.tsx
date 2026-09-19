@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   X,
   Link as LinkIcon,
@@ -15,6 +15,7 @@ import {
   ExternalLink,
   CheckCircle2,
   EyeOff,
+  AlertCircle,
 } from 'lucide-react';
 import { Category, SavedLink } from '../types';
 import { CategoryIcon } from './CategoryIcon';
@@ -25,7 +26,9 @@ import {
   guessCategory,
   generateTitleFromUrl,
   getDefaultThumbnailUrl,
+  isSameUrl,
 } from '../utils/urlHelper';
+import { isLinkInCategory } from '../utils/qrHelper';
 import { fetchLinkMetadata, extractQuickMetadata } from '../utils/fetchMetadata';
 
 interface AddEditLinkModalProps {
@@ -37,6 +40,7 @@ interface AddEditLinkModalProps {
   editingLink?: SavedLink | null;
   categories: Category[];
   initialCategorySlug?: string;
+  existingLinks?: SavedLink[];
 }
 
 export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
@@ -46,6 +50,7 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
   editingLink,
   categories,
   initialCategorySlug,
+  existingLinks,
 }) => {
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -55,6 +60,40 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
   const [tags, setTags] = useState<string[]>([]);
   const [isFavorite, setIsFavorite] = useState(false);
   const [suggestedCategory, setSuggestedCategory] = useState<string | null>(null);
+
+  // Active target category object
+  const targetCategoryObj = useMemo(() => {
+    return (
+      categories.find((c) => c.slug === categorySlug) || {
+        slug: categorySlug,
+        name: categorySlug,
+      }
+    );
+  }, [categories, categorySlug]);
+
+  // Check if link already exists in the currently selected category
+  const duplicateInCurrentCategory = useMemo(() => {
+    if (!url || !url.trim() || !existingLinks) return null;
+    return (
+      existingLinks.find(
+        (l) =>
+          (!editingLink || l.id !== editingLink.id) &&
+          isLinkInCategory(l.categorySlug, targetCategoryObj) &&
+          isSameUrl(l.url, url)
+      ) || null
+    );
+  }, [url, targetCategoryObj, existingLinks, editingLink]);
+
+  // Check if link exists in other categories (to explicitly inform user that cross-category save is allowed)
+  const existingInOtherCategories = useMemo(() => {
+    if (!url || !url.trim() || !existingLinks) return [];
+    return existingLinks.filter(
+      (l) =>
+        (!editingLink || l.id !== editingLink.id) &&
+        !isLinkInCategory(l.categorySlug, targetCategoryObj) &&
+        isSameUrl(l.url, url)
+    );
+  }, [url, targetCategoryObj, existingLinks, editingLink]);
 
   // OpenGraph Thumbnail & Favicon states
   const [imageUrl, setImageUrl] = useState<string>('');
@@ -243,6 +282,13 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
       return;
     }
 
+    if (duplicateInCurrentCategory) {
+      setError(
+        `This link is already saved in the "${targetCategoryObj.name}" category. Duplicate entries in the same category are not allowed, but you can save it into a different category.`
+      );
+      return;
+    }
+
     const finalTitle =
       title.trim() || generateTitleFromUrl(finalUrl) || extractHostname(finalUrl);
 
@@ -371,9 +417,66 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
                 onChange={(e) => handleUrlChange(e.target.value)}
                 required
                 autoFocus={!editingLink}
-                className="w-full pl-9 pr-3 py-2 text-xs border border-slate-300 dark:border-slate-700 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 dark:focus:border-cyan-400 transition-all text-[#0F172A] dark:text-[#F1F5F9] bg-white dark:bg-[#070B14] placeholder-slate-400 dark:placeholder-slate-500"
+                className={`w-full pl-9 pr-3 py-2 text-xs border rounded-xl focus:outline-hidden focus:ring-2 transition-all text-[#0F172A] dark:text-[#F1F5F9] bg-white dark:bg-[#070B14] placeholder-slate-400 dark:placeholder-slate-500 ${
+                  duplicateInCurrentCategory
+                    ? 'border-amber-400 dark:border-amber-600 focus:ring-amber-500/20 focus:border-amber-500'
+                    : 'border-slate-300 dark:border-slate-700 focus:ring-blue-500/20 focus:border-blue-500 dark:focus:border-cyan-400'
+                }`}
               />
             </div>
+
+            {/* Duplicate link in same category alert */}
+            {duplicateInCurrentCategory && (
+              <div
+                id="duplicate-link-warning"
+                className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs space-y-1.5 animate-in fade-in duration-200"
+              >
+                <div className="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-200">
+                  <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>Already saved in "{targetCategoryObj.name}"</span>
+                </div>
+                <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+                  This destination is already saved in{' '}
+                  <strong className="font-semibold text-amber-950 dark:text-amber-100">
+                    {targetCategoryObj.name}
+                  </strong>{' '}
+                  as{' '}
+                  <strong className="font-semibold text-amber-950 dark:text-amber-100">
+                    "{duplicateInCurrentCategory.title}"
+                  </strong>
+                  . Duplicate entries in the same category are not permitted.
+                </p>
+                <div className="text-[11px] text-amber-700/90 dark:text-amber-300/90 flex items-center gap-1.5 pt-0.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span>
+                    Tip: You can select a different category below to save this link there.
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Cross-category allowed info notice */}
+            {!duplicateInCurrentCategory && existingInOtherCategories.length > 0 && (
+              <div
+                id="cross-category-allowed-notice"
+                className="p-2.5 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300 text-[11px] flex items-center gap-2 animate-in fade-in duration-200"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>
+                  This link is already in{' '}
+                  <strong className="font-semibold">
+                    {existingInOtherCategories
+                      .map(
+                        (l) =>
+                          categories.find((c) => isLinkInCategory(l.categorySlug, c))?.name ||
+                          l.categorySlug
+                      )
+                      .join(', ')}
+                  </strong>
+                  . Adding it to <strong className="font-semibold">{targetCategoryObj.name}</strong> is allowed!
+                </span>
+              </div>
+            )}
 
             {/* Smart Category suggestion badge */}
             {suggestedCategory && suggestedCategory !== categorySlug && (
@@ -585,6 +688,15 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {categories.map((cat) => {
                 const isSelected = categorySlug === cat.slug;
+                const isLinkInThisCat =
+                  url.trim().length > 4 &&
+                  existingLinks?.some(
+                    (l) =>
+                      (!editingLink || l.id !== editingLink.id) &&
+                      isLinkInCategory(l.categorySlug, cat) &&
+                      isSameUrl(l.url, url)
+                  );
+
                 return (
                   <button
                     key={cat.slug}
@@ -593,7 +705,9 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
                     onClick={() => setCategorySlug(cat.slug)}
                     className={`flex items-center gap-2 p-2 rounded-xl border text-left text-xs font-medium transition-all cursor-pointer ${
                       isSelected
-                        ? 'border-blue-600 dark:border-cyan-400 bg-blue-50/50 dark:bg-blue-950/40 text-blue-900 dark:text-cyan-200 shadow-xs ring-1 ring-blue-500 dark:ring-cyan-400'
+                        ? isLinkInThisCat
+                          ? 'border-amber-500 dark:border-amber-500 bg-amber-50/50 dark:bg-amber-950/40 text-amber-950 dark:text-amber-100 shadow-xs ring-1 ring-amber-400 dark:ring-amber-500'
+                          : 'border-blue-600 dark:border-cyan-400 bg-blue-50/50 dark:bg-blue-950/40 text-blue-900 dark:text-cyan-200 shadow-xs ring-1 ring-blue-500 dark:ring-cyan-400'
                         : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-[#111B2E] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/80'
                     }`}
                   >
@@ -608,6 +722,14 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
                       />
                     </div>
                     <span className="truncate flex-1">{cat.name}</span>
+                    {isLinkInThisCat && (
+                      <span
+                        className="text-[9px] font-bold text-amber-600 dark:text-amber-400 bg-amber-100/90 dark:bg-amber-950/70 border border-amber-300/80 dark:border-amber-800/80 px-1 py-0.5 rounded-sm shrink-0"
+                        title="Link already saved in this category"
+                      >
+                        Saved
+                      </span>
+                    )}
                     {cat.hideFromAll && (
                       <EyeOff className="w-3 h-3 text-slate-400 shrink-0" title="Private category (hidden from All Links)" />
                     )}
@@ -732,8 +854,13 @@ export const AddEditLinkModal: React.FC<AddEditLinkModalProps> = ({
             <button
               type="submit"
               id="submit-link-btn"
-              disabled={isSaving}
-              className="px-5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 rounded-xl shadow-xs transition-colors disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              disabled={isSaving || !!duplicateInCurrentCategory}
+              title={
+                duplicateInCurrentCategory
+                  ? `This link is already saved in "${targetCategoryObj.name}". Please select another category to save.`
+                  : undefined
+              }
+              className="px-5 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 rounded-xl shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
             >
               {isSaving ? (
                 <>

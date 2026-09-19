@@ -7,6 +7,60 @@ export function normalizeUrl(input: string): string {
   return trimmed;
 }
 
+/**
+ * Normalizes a URL for duplicate-checking comparison:
+ * - Ensures https scheme
+ * - Strips leading www.
+ * - Standardizes case for hostname
+ * - Strips trailing slash on pathname
+ * - Sorts search query parameters
+ */
+export function normalizeUrlForComparison(rawUrl: string): string {
+  if (!rawUrl || typeof rawUrl !== 'string') return '';
+  let trimmed = rawUrl.trim();
+  if (!trimmed) return '';
+
+  if (!/^https?:\/\//i.test(trimmed)) {
+    trimmed = 'https://' + trimmed;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const port = parsed.port ? `:${parsed.port}` : '';
+
+    let pathname = parsed.pathname || '/';
+    if (pathname.length > 1 && pathname.endsWith('/')) {
+      pathname = pathname.replace(/\/+$/, '');
+    }
+
+    const searchParams = new URLSearchParams(parsed.search);
+    searchParams.sort();
+    const search = searchParams.toString() ? `?${searchParams.toString()}` : '';
+
+    return `https://${hostname}${port}${pathname}${search}`;
+  } catch {
+    return trimmed
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .replace(/\/+$/, '');
+  }
+}
+
+/**
+ * Checks whether two URLs point to the same canonical destination.
+ */
+export function isSameUrl(
+  urlA: string | undefined | null,
+  urlB: string | undefined | null
+): boolean {
+  if (!urlA || !urlB) return false;
+  const compA = normalizeUrlForComparison(urlA);
+  const compB = normalizeUrlForComparison(urlB);
+  return compA !== '' && compA === compB;
+}
+
 export function extractHostname(url: string): string {
   try {
     const parsed = new URL(normalizeUrl(url));

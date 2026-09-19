@@ -21,6 +21,7 @@ import { Category, SavedLink, ViewMode } from '../types';
 import { CategoryIcon } from './CategoryIcon';
 import { extractHostname, getFaviconUrl, getDefaultThumbnailUrl, normalizeUrl } from '../utils/urlHelper';
 import { LinkLongPressSheet } from './LinkLongPressSheet';
+import { LinkMenuDropdown } from './LinkMenuDropdown';
 
 interface LinkCardProps {
   link: SavedLink;
@@ -49,6 +50,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
   const [showOpenMenu, setShowOpenMenu] = useState(false);
   const [faviconError, setFaviconError] = useState(false);
   const [thumbnailError, setThumbnailError] = useState(false);
@@ -250,7 +252,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
         onContextMenu={handleContextMenu}
         onClick={handleCardClick}
         style={{ WebkitTouchCallout: 'none' }}
-        className={`group relative flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-3.5 bg-white dark:bg-[#0D1422] rounded-xl border border-slate-200/90 dark:border-slate-800/90 hover:border-blue-400/50 dark:hover:border-blue-500/40 hover:shadow-md transition-all gap-2.5 sm:gap-4 overflow-hidden select-none touch-manipulation cursor-pointer sm:cursor-default ${
+        className={`group relative flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-3.5 bg-white dark:bg-[#0D1422] rounded-xl border border-slate-200/90 dark:border-slate-800/90 hover:border-blue-400/50 dark:hover:border-blue-500/40 hover:shadow-md transition-all gap-2.5 sm:gap-4 select-none touch-manipulation cursor-pointer sm:cursor-default ${
           isPressing ? 'scale-[0.99] ring-2 ring-cyan-400/50 bg-cyan-500/10' : ''
         }`}
       >
@@ -494,6 +496,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
             {/* 3-dots Menu */}
             <div className="relative">
               <button
+                ref={menuButtonRef}
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -506,75 +509,6 @@ export const LinkCard: React.FC<LinkCardProps> = ({
               >
                 <MoreVertical className="w-4 h-4" />
               </button>
-              {showMenu && (
-                <>
-                  <div
-                    className="fixed inset-0 z-20"
-                    onClick={() => setShowMenu(false)}
-                  />
-                  <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-[#0D1422] rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 py-1.5 z-30 animate-in fade-in zoom-in-95 duration-100">
-                    {onOpenOptions && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMenu(false);
-                          onOpenOptions(link);
-                        }}
-                        className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                      >
-                        <ExternalLink className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
-                        <span>Launch Options</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        handleOpenIncognito();
-                      }}
-                      className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                    >
-                      <Shield className="w-4 h-4 text-slate-600 dark:text-slate-400" />
-                      <span>Incognito Details</span>
-                    </button>
-                    {onShareQr && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMenu(false);
-                          onShareQr(link);
-                        }}
-                        className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                      >
-                        <QrCode className="w-4 h-4 text-slate-400 dark:text-slate-200" />
-                        <span>Share QR Code</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        onEdit(link);
-                      }}
-                      className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                    >
-                      <Edit2 className="w-4 h-4 text-slate-400 dark:text-slate-200" />
-                      <span>Edit</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        onDelete(link.id);
-                      }}
-                      className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                      <span>Delete</span>
-                    </button>
-                  </div>
-                </>
-              )}
             </div>
           </div>
         </div>
@@ -648,6 +582,19 @@ export const LinkCard: React.FC<LinkCardProps> = ({
           </div>
         )}
 
+        {/* Portaled 3-Dots Action Dropdown Menu */}
+        <LinkMenuDropdown
+          isOpen={showMenu}
+          onClose={() => setShowMenu(false)}
+          triggerRef={menuButtonRef}
+          link={link}
+          onOpenOptions={onOpenOptions}
+          onOpenIncognito={() => handleOpenIncognito()}
+          onShareQr={onShareQr}
+          onEdit={onEdit}
+          onDelete={onDelete}
+        />
+
         {/* Mobile Long-Press Quick Actions Bottom Sheet */}
         <LinkLongPressSheet
           isOpen={showLongPressSheet}
@@ -687,40 +634,42 @@ export const LinkCard: React.FC<LinkCardProps> = ({
       onContextMenu={handleContextMenu}
       onClick={handleCardClick}
       style={{ WebkitTouchCallout: 'none' }}
-      className={`group relative flex flex-col justify-between bg-white dark:bg-[#0D1422] rounded-2xl border border-slate-200/90 dark:border-slate-800/90 hover:border-blue-400/50 dark:hover:border-blue-500/40 hover:shadow-lg transition-all duration-200 overflow-hidden select-none touch-manipulation cursor-pointer sm:cursor-default ${
-        isPressing ? 'scale-[0.99] ring-2 ring-cyan-400/50 bg-cyan-500/10' : ''
-      }`}
+      className={`group relative flex flex-col justify-between bg-white dark:bg-[#0D1422] rounded-2xl border border-slate-200/90 dark:border-slate-800/90 hover:border-blue-400/50 dark:hover:border-blue-500/40 hover:shadow-lg transition-all duration-200 select-none touch-manipulation cursor-pointer sm:cursor-default ${
+        showMenu ? 'z-30' : 'z-auto'
+      } ${isPressing ? 'scale-[0.99] ring-2 ring-cyan-400/50 bg-cyan-500/10' : ''}`}
     >
       {/* Top OpenGraph Banner (if available) */}
       {hasThumbnail && (
-        <div className="relative w-full h-36 sm:h-40 overflow-hidden bg-slate-100 dark:bg-[#111B2E] border-b border-slate-100 dark:border-slate-800/80">
-          <a
-            href={targetUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => {
-              if (didLongPressRef.current) {
-                e.preventDefault();
-                return;
-              }
-              onOpen(link);
-            }}
-            onTouchStart={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="block w-full h-full cursor-pointer touch-manipulation"
-            title={`Open ${link.title}`}
-          >
-            <img
-              src={effectiveThumbnail}
-              alt={link.title}
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              onError={() => setThumbnailError(true)}
-            />
-          </a>
+        <div className="relative w-full h-36 sm:h-40 rounded-t-2xl bg-slate-100 dark:bg-[#111B2E] border-b border-slate-100 dark:border-slate-800/80">
+          <div className="absolute inset-0 overflow-hidden rounded-t-2xl">
+            <a
+              href={targetUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                if (didLongPressRef.current) {
+                  e.preventDefault();
+                  return;
+                }
+                onOpen(link);
+              }}
+              onTouchStart={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              className="block w-full h-full cursor-pointer touch-manipulation"
+              title={`Open ${link.title}`}
+            >
+              <img
+                src={effectiveThumbnail}
+                alt={link.title}
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                onError={() => setThumbnailError(true)}
+              />
+            </a>
+          </div>
 
           {/* Banner Overlays: Category pill & action buttons */}
-          <div className="absolute inset-x-0 top-0 p-3 flex items-center justify-between bg-gradient-to-b from-slate-900/60 to-transparent">
+          <div className="absolute inset-x-0 top-0 p-3 flex items-center justify-between bg-gradient-to-b from-slate-900/60 to-transparent z-10">
             {category && (
               <span
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/95 dark:bg-[#0D1422]/90 text-slate-800 dark:text-slate-100 shadow-xs backdrop-blur-xs border border-transparent dark:border-slate-700/60"
@@ -764,6 +713,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
               {/* Menu */}
               <div className="relative">
                 <button
+                  ref={menuButtonRef}
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -776,64 +726,6 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                 >
                   <MoreVertical className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                 </button>
-                {showMenu && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-20"
-                      onClick={() => setShowMenu(false)}
-                    />
-                    <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-[#0D1422] rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 py-1.5 z-30 animate-in fade-in zoom-in-95 duration-100">
-                      {onOpenOptions && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowMenu(false);
-                            onOpenOptions(link);
-                          }}
-                          className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                        >
-                          <ExternalLink className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
-                          <span>Launch Options</span>
-                        </button>
-                      )}
-                      {onShareQr && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowMenu(false);
-                            onShareQr(link);
-                          }}
-                          className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                        >
-                          <QrCode className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
-                          <span>Share QR Code</span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMenu(false);
-                          onEdit(link);
-                        }}
-                        className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                        <span>Edit</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMenu(false);
-                          onDelete(link.id);
-                        }}
-                        className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        <span>Delete</span>
-                      </button>
-                    </div>
-                  </>
-                )}
               </div>
             </div>
           </div>
@@ -891,6 +783,7 @@ export const LinkCard: React.FC<LinkCardProps> = ({
 
                 <div className="relative">
                   <button
+                    ref={menuButtonRef}
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -903,64 +796,6 @@ export const LinkCard: React.FC<LinkCardProps> = ({
                   >
                     <MoreVertical className="w-4 h-4" />
                   </button>
-                  {showMenu && (
-                    <>
-                      <div
-                        className="fixed inset-0 z-20"
-                        onClick={() => setShowMenu(false)}
-                      />
-                      <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-[#0D1422] rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 py-1.5 z-30 animate-in fade-in zoom-in-95 duration-100">
-                        {onOpenOptions && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowMenu(false);
-                              onOpenOptions(link);
-                            }}
-                            className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                          >
-                            <ExternalLink className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
-                            <span>Launch Options</span>
-                          </button>
-                        )}
-                        {onShareQr && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowMenu(false);
-                              onShareQr(link);
-                            }}
-                            className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                          >
-                            <QrCode className="w-4 h-4 text-slate-400 dark:text-slate-200" />
-                            <span>Share QR Code</span>
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowMenu(false);
-                            onEdit(link);
-                          }}
-                          className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-[#111B2E] flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                        >
-                          <Edit2 className="w-4 h-4 text-slate-400 dark:text-slate-200" />
-                          <span>Edit</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowMenu(false);
-                            onDelete(link.id);
-                          }}
-                          className="w-full px-3.5 py-2.5 sm:py-1.5 text-left text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-2.5 min-h-[44px] sm:min-h-0 touch-manipulation"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                          <span>Delete</span>
-                        </button>
-                      </div>
-                    </>
-                  )}
                 </div>
               </div>
             </div>
@@ -1176,6 +1011,19 @@ export const LinkCard: React.FC<LinkCardProps> = ({
           </div>
         </div>
       )}
+
+      {/* Portaled 3-Dots Action Dropdown Menu */}
+      <LinkMenuDropdown
+        isOpen={showMenu}
+        onClose={() => setShowMenu(false)}
+        triggerRef={menuButtonRef}
+        link={link}
+        onOpenOptions={onOpenOptions}
+        onOpenIncognito={() => handleOpenIncognito()}
+        onShareQr={onShareQr}
+        onEdit={onEdit}
+        onDelete={onDelete}
+      />
 
       {/* Mobile Long-Press Quick Actions Bottom Sheet */}
       <LinkLongPressSheet

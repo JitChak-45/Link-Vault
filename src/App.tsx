@@ -29,7 +29,10 @@ import {
   GripVertical,
   ChevronLeft,
   ChevronRight,
+  Upload,
+  FileDown,
 } from 'lucide-react';
+import { exportLinksToPdf } from './utils/pdfExport';
 import {
   auth,
   db,
@@ -53,18 +56,21 @@ import {
   saveLocalLinks,
 } from './utils/localVault';
 import { decodeShareData, decodeShareDataAsync, isLinkInCategory } from './utils/qrHelper';
-import { getFaviconUrl } from './utils/urlHelper';
+import { getFaviconUrl, isSameUrl, normalizeUrlForComparison } from './utils/urlHelper';
 import { CategoryIcon } from './components/CategoryIcon';
 import { LinkCard } from './components/LinkCard';
 import { AddEditLinkModal } from './components/AddEditLinkModal';
 import { CategoryModal } from './components/CategoryModal';
 import { SyncModal } from './components/SyncModal';
+import { BulkImportModal } from './components/BulkImportModal';
 import { PinLockScreen } from './components/PinLockScreen';
 import { OpenLinkModal } from './components/OpenLinkModal';
 import { QrShareModal } from './components/QrShareModal';
 import { QrScannerModal } from './components/QrScannerModal';
 import { ImportSharedModal } from './components/ImportSharedModal';
 import { DeleteCategoryModal } from './components/DeleteCategoryModal';
+import { CategoryTabItem } from './components/CategoryTabItem';
+import { TopRightAuthWidget } from './components/TopRightAuthWidget';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -99,6 +105,7 @@ export default function App() {
   const [importPayload, setImportPayload] = useState<QrSharePayload | null>(null);
   const [isOpenLinkModalOpen, setIsOpenLinkModalOpen] = useState(false);
   const [linkToOpen, setLinkToOpen] = useState<SavedLink | null>(null);
+  const [isBulkImportModalOpen, setIsBulkImportModalOpen] = useState(false);
   const [importSuccessMessage, setImportSuccessMessage] = useState<string | null>(null);
 
   // Category Scroll & Reorder State
@@ -403,6 +410,29 @@ export default function App() {
   const handleSaveLink = async (
     linkData: Omit<SavedLink, 'id' | 'createdAt' | 'updatedAt' | 'clickCount'>
   ) => {
+    // Check if link already exists in the same category (allow same link in different categories)
+    const targetCategory = categories.find((c) => c.slug === linkData.categorySlug) || {
+      slug: linkData.categorySlug,
+      name: linkData.categorySlug,
+    };
+    const duplicateInCategory = links.find(
+      (l) =>
+        (!editingLink || l.id !== editingLink.id) &&
+        isLinkInCategory(l.categorySlug, targetCategory) &&
+        isSameUrl(l.url, linkData.url)
+    );
+
+    if (duplicateInCategory) {
+      setIsSyncing(false);
+      const catName =
+        categories.find((c) => isLinkInCategory(c.slug, targetCategory))?.name ||
+        targetCategory.name ||
+        'this';
+      throw new Error(
+        `This link already exists in the "${catName}" category. Duplicate entries in the same category are not permitted, but you can save this link into a different category.`
+      );
+    }
+
     setIsSyncing(true);
     if (editingLink) {
       const updatedList = links.map((l) =>
@@ -873,6 +903,29 @@ export default function App() {
   }) => {
     setIsSyncing(true);
     const rawUrl = (linkData.url || '').trim();
+
+    // Check if duplicate in the same category
+    const targetCat = categories.find(
+      (c) => c.slug === (linkData.categorySlug || 'general')
+    ) || {
+      slug: linkData.categorySlug || 'general',
+      name: linkData.categorySlug || 'general',
+    };
+    const duplicateInThisCategory = links.find(
+      (l) => isLinkInCategory(l.categorySlug, targetCat) && isSameUrl(l.url, rawUrl)
+    );
+    if (duplicateInThisCategory) {
+      setIsSyncing(false);
+      const catName =
+        categories.find((c) => isLinkInCategory(c.slug, targetCat))?.name ||
+        targetCat.name;
+      setImportSuccessMessage(
+        `Link already exists in "${catName}" category. Skipped duplicate entry.`
+      );
+      setTimeout(() => setImportSuccessMessage(null), 5000);
+      return;
+    }
+
     const newId = user
       ? doc(collection(db, 'users', user.uid, 'links')).id
       : `imported-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -921,18 +974,159 @@ export default function App() {
       createdAt: item.createdAt || Date.now(),
       updatedAt: Date.now(),
     }));
-    const updated = [...cleaned, ...links];
+
+    // Prevent duplicate entries in the same category while allowing them across different categories
+    const existingKeys = new Set(
+      links.map(
+        (l) => `${(l.categorySlug || '').toLowerCase()}::${normalizeUrlForComparison(l.url)}`
+      )
+    );
+    const nonDuplicates: SavedLink[] = [];
+    for (const item of cleaned) {
+      const key = `${(item.categorySlug || '').toLowerCase()}::${normalizeUrlForComparison(item.url)}`;
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key);
+        nonDuplicates.push(item);
+      }
+    }
+
+    const updated = [...nonDuplicates, ...links];
     setLinks(updated);
     saveLocalLinks(updated);
 
     if (user) {
       const linksColRef = collection(db, 'users', user.uid, 'links');
-      for (const item of cleaned) {
+      for (const item of nonDuplicates) {
         const newRef = doc(linksColRef, item.id);
         await setDoc(newRef, item);
       }
     }
     setIsSyncing(false);
+  };
+
+  const handleConfirmBulkImport = async (
+    linksToImport: Array<{
+      title: string;
+      url: string;
+      categorySlug: string;
+      description?: string;
+      tags: string[];
+      isFavorite?: boolean;
+    }>,
+    newCategoriesToCreate: Category[]
+  ) => {
+    setIsSyncing(true);
+
+    // 1. Create any newly detected categories first
+    let currentCategories = [...categories];
+    if (newCategoriesToCreate.length > 0) {
+      const existingSlugs = new Set(currentCategories.map((c) => c.slug.toLowerCase()));
+      const categoriesToAdd = newCategoriesToCreate.filter(
+        (c) => !existingSlugs.has(c.slug.toLowerCase())
+      );
+
+      if (categoriesToAdd.length > 0) {
+        currentCategories = [...currentCategories, ...categoriesToAdd];
+        setCategories(currentCategories);
+        saveLocalCategories(currentCategories);
+
+        if (user) {
+          for (const cat of categoriesToAdd) {
+            const catRef = doc(db, 'users', user.uid, 'categories', cat.slug);
+            await setDoc(catRef, cat);
+          }
+        }
+      }
+    }
+
+    // 2. Prepare and clean links
+    const cleanedLinks: SavedLink[] = linksToImport.map((item, idx) => ({
+      id: `imported_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 7)}`,
+      title: item.title,
+      url: item.url,
+      categorySlug: item.categorySlug,
+      description: item.description,
+      tags: item.tags || [],
+      isFavorite: Boolean(item.isFavorite),
+      clickCount: 0,
+      createdAt: Date.now() - (linksToImport.length - idx) * 50,
+      updatedAt: Date.now(),
+      faviconUrl: getFaviconUrl(item.url),
+    }));
+
+    // Prevent duplicate entries in the same category
+    const existingKeys = new Set(
+      links.map(
+        (l) => `${(l.categorySlug || '').toLowerCase()}::${normalizeUrlForComparison(l.url)}`
+      )
+    );
+    const nonDuplicates: SavedLink[] = [];
+    for (const item of cleanedLinks) {
+      const key = `${(item.categorySlug || '').toLowerCase()}::${normalizeUrlForComparison(item.url)}`;
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key);
+        nonDuplicates.push(item);
+      }
+    }
+
+    const updated = [...nonDuplicates, ...links];
+    setLinks(updated);
+    saveLocalLinks(updated);
+
+    // Save to Firestore if logged in
+    if (user) {
+      const linksColRef = collection(db, 'users', user.uid, 'links');
+      for (const item of nonDuplicates) {
+        const newRef = doc(linksColRef, item.id);
+        await setDoc(newRef, item);
+      }
+    }
+
+    setIsSyncing(false);
+
+    // Feedback message
+    const categoryNotice =
+      newCategoriesToCreate.length > 0
+        ? ` and created ${newCategoriesToCreate.length} new ${
+            newCategoriesToCreate.length === 1 ? 'category' : 'categories'
+          }`
+        : '';
+    setImportSuccessMessage(
+      `Successfully imported ${nonDuplicates.length} ${
+        nonDuplicates.length === 1 ? 'link' : 'links'
+      }${categoryNotice}!`
+    );
+    setTimeout(() => setImportSuccessMessage(null), 5000);
+  };
+
+  // Handler for Exporting all links as a formatted PDF backup (Title then URL)
+  const handleExportPdfBackup = () => {
+    if (links.length === 0) {
+      setImportSuccessMessage('No links found in your vault to export! Add some links first.');
+      setTimeout(() => setImportSuccessMessage(null), 4000);
+      return;
+    }
+
+    const currentCategoryObj = categories.find(
+      (c) => c.slug === selectedCategory || c.id === selectedCategory
+    );
+    const result = exportLinksToPdf(links, categories, {
+      vaultName: 'Link Vault — Backup',
+      categoryName:
+        selectedCategory !== 'all' && selectedCategory !== 'favorites' && currentCategoryObj
+          ? currentCategoryObj.name
+          : undefined,
+    });
+
+    if (result.success) {
+      setImportSuccessMessage(
+        `Exported ${result.count} links to "${result.filename}" automatically!`
+      );
+      setTimeout(() => setImportSuccessMessage(null), 5000);
+    } else {
+      setImportSuccessMessage(`Export failed: ${result.error || 'Unknown error'}`);
+      setTimeout(() => setImportSuccessMessage(null), 5000);
+    }
   };
 
   // PIN Protection Handlers
@@ -1114,6 +1308,52 @@ export default function App() {
       });
   }, [links, selectedCategory, selectedTag, searchQuery, sortBy, categoryMap]);
 
+  // Category order mapping for directional transition calculation
+  const categoryOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    map.set('all', 0);
+    map.set('favorites', 1);
+    categories.forEach((cat, idx) => {
+      map.set(cat.slug, idx + 2);
+    });
+    return map;
+  }, [categories]);
+
+  // Synchronously compute transition direction when switching categories
+  const [prevCategoryForAnim, setPrevCategoryForAnim] = useState(selectedCategory);
+  const [slideDirection, setSlideDirection] = useState(1);
+
+  if (selectedCategory !== prevCategoryForAnim) {
+    setPrevCategoryForAnim(selectedCategory);
+    const prevIdx = categoryOrderMap.get(prevCategoryForAnim) ?? 0;
+    const currentIdx = categoryOrderMap.get(selectedCategory) ?? 0;
+    setSlideDirection(currentIdx >= prevIdx ? 1 : -1);
+  }
+
+  // Smooth slide-in animation variants for category transitions
+  const linksContainerVariants = {
+    enter: (direction: number) => ({
+      x: direction >= 0 ? 18 : -18,
+      opacity: 0,
+    }),
+    center: {
+      x: 0,
+      opacity: 1,
+      transition: {
+        duration: 0.22,
+        ease: [0.16, 1, 0.3, 1],
+      },
+    },
+    exit: (direction: number) => ({
+      x: direction >= 0 ? -14 : 14,
+      opacity: 0,
+      transition: {
+        duration: 0.14,
+        ease: 'easeIn',
+      },
+    }),
+  };
+
   return (
     <div
       className="min-h-screen bg-[#F3F7FC] dark:bg-[#070B14] text-[#0F172A] dark:text-[#F1F5F9] flex flex-col font-sans antialiased selection:bg-cyan-500/20 selection:text-cyan-700 dark:selection:text-cyan-300 transition-colors duration-300 relative overflow-x-hidden"
@@ -1217,6 +1457,18 @@ export default function App() {
                 )}
               </button>
 
+              {/* PDF Backup Export Button */}
+              <button
+                type="button"
+                id="export-pdf-header-btn"
+                onClick={handleExportPdfBackup}
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-[#0D1422] hover:bg-slate-50 dark:hover:bg-[#111B2E] transition-all text-xs text-slate-700 dark:text-slate-200 shadow-2xs font-medium shrink-0 cursor-pointer"
+                title="Export all links as PDF backup (Title then URL)"
+              >
+                <FileDown className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400 shrink-0" />
+                <span className="hidden sm:inline">Export</span>
+              </button>
+
               {/* Scan QR Code Button */}
               <button
                 type="button"
@@ -1241,30 +1493,12 @@ export default function App() {
                 <span className="hidden md:inline">{hasPinSet ? 'Lock Vault' : 'Set PIN'}</span>
               </button>
 
-              {/* Cloud Sync Status Button */}
-              <button
-                id="open-sync-status-btn"
-                onClick={() => setIsSyncModalOpen(true)}
-                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl border border-slate-200/90 dark:border-slate-800 bg-white dark:bg-[#0D1422] hover:bg-slate-50 dark:hover:bg-[#111B2E] transition-all text-xs text-slate-700 dark:text-slate-200 shadow-2xs shrink-0"
-                title="Configure multi-device cloud synchronization"
-              >
-                <span className="relative flex h-2 w-2 sm:h-2.5 sm:w-2.5 shrink-0">
-                  <span
-                    className={`animate-ping absolute inline-flex h-full w-full rounded-full ${
-                      user ? 'bg-emerald-400' : 'bg-cyan-400'
-                    } opacity-75`}
-                  ></span>
-                  <span
-                    className={`relative inline-flex rounded-full h-2 w-2 sm:h-2.5 sm:w-2.5 ${
-                      user ? 'bg-emerald-500' : 'bg-cyan-500'
-                    }`}
-                  ></span>
-                </span>
-                <span className="font-medium hidden md:inline">
-                  {user ? 'Synced' : 'Sync'}
-                </span>
-                <Cloud className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0 hidden sm:block" />
-              </button>
+              {/* Top-Right User Email & Sign In Widget */}
+              <TopRightAuthWidget
+                user={user}
+                authInitialized={authInitialized}
+                onOpenSyncModal={() => setIsSyncModalOpen(true)}
+              />
 
               {/* Add Link Button */}
               <button
@@ -1355,8 +1589,10 @@ export default function App() {
 
           {/* Category Pills List with Fluid Tab Drag-and-Drop & Auto Horizontal Scrolling */}
           <div
+            id="categories-tabs-scroll-container"
             ref={categoriesScrollRef}
-            className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin select-none relative"
+            className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin select-none relative touch-pan-x"
+            style={{ WebkitOverflowScrolling: 'touch' }}
           >
             {/* All Links Pill (Static) */}
             <button
@@ -1408,13 +1644,13 @@ export default function App() {
               </span>
             </button>
 
-            {/* Reorderable Custom Category Tabs (Reorder.Group for genuine physical tab movement) */}
+            {/* Reorderable Custom Category Tabs (Reorder.Group for physical fluid motion) */}
             <Reorder.Group
               as="div"
               axis="x"
               values={categories}
               onReorder={handleReorderCategoriesList}
-              className="flex items-center gap-2 shrink-0"
+              className="flex items-center gap-2 shrink-0 touch-pan-x"
             >
               {categories.map((cat) => {
                 const isSelected = selectedCategory === cat.slug;
@@ -1422,166 +1658,28 @@ export default function App() {
                 const isDraggingThis = activeDraggingCatSlug === cat.slug;
 
                 return (
-                  <Reorder.Item
+                  <CategoryTabItem
                     key={cat.slug}
-                    value={cat}
-                    as="div"
-                    dragListener={true}
-                    whileDrag={{
-                      scale: 1.05,
-                      zIndex: 60,
-                      cursor: 'grabbing',
-                      boxShadow:
-                        theme === 'dark'
-                          ? '0 16px 36px -4px rgba(0, 0, 0, 0.9), 0 0 0 2px rgba(6, 182, 212, 0.9)'
-                          : '0 16px 36px -4px rgba(0, 0, 0, 0.25), 0 0 0 2px rgba(6, 182, 212, 0.9)',
+                    cat={cat}
+                    isSelected={isSelected}
+                    count={count}
+                    isDraggingThis={isDraggingThis}
+                    theme={theme}
+                    categoriesScrollRef={categoriesScrollRef}
+                    categoriesRef={categoriesRef}
+                    autoScrollSpeedRef={autoScrollSpeedRef}
+                    startAutoScroll={startAutoScroll}
+                    stopAutoScroll={stopAutoScroll}
+                    setActiveDraggingCatSlug={setActiveDraggingCatSlug}
+                    commitCategoryOrderToCloud={commitCategoryOrderToCloud}
+                    onSelectCategory={setSelectedCategory}
+                    onEditCategory={(c) => {
+                      setEditingCategory(c);
+                      setIsCategoryModalOpen(true);
                     }}
-                    transition={{ type: 'spring', damping: 28, stiffness: 380 }}
-                    onDragStart={() => {
-                      setActiveDraggingCatSlug(cat.slug);
-                      startAutoScroll();
-                    }}
-                    onDrag={(event, info) => {
-                      const container = categoriesScrollRef.current;
-                      if (!container) return;
-                      const rect = container.getBoundingClientRect();
-                      const x = info.point.x;
-                      const threshold = 120;
-
-                      // Auto-scroll when dragged near left edge (towards start / All Links / Starred)
-                      if (x < rect.left + threshold) {
-                        const dist = (rect.left + threshold) - x;
-                        const factor = Math.min(1.8, Math.max(0.3, dist / threshold));
-                        autoScrollSpeedRef.current = -Math.round(18 * factor);
-                      }
-                      // Auto-scroll when dragged near right edge (towards end)
-                      else if (x > rect.right - threshold) {
-                        const dist = x - (rect.right - threshold);
-                        const factor = Math.min(1.8, Math.max(0.3, dist / threshold));
-                        autoScrollSpeedRef.current = Math.round(18 * factor);
-                      } else {
-                        autoScrollSpeedRef.current = 0;
-                      }
-                    }}
-                    onDragEnd={() => {
-                      stopAutoScroll();
-                      commitCategoryOrderToCloud(categoriesRef.current);
-                    }}
-                    className={`relative group shrink-0 flex items-center rounded-xl transition-colors border select-none ${
-                      isSelected
-                        ? 'text-white shadow-xs border-transparent'
-                        : 'bg-white dark:bg-[#0D1422] border-slate-200/90 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-[#111B2E]'
-                    } ${isDraggingThis ? 'opacity-95' : 'opacity-100'}`}
-                    style={isSelected ? { backgroundColor: cat.color } : undefined}
-                  >
-                    {/* Drag Grip Handle */}
-                    <div
-                      className={`pl-2.5 pr-0.5 py-2 cursor-grab active:cursor-grabbing flex items-center shrink-0 transition-colors ${
-                        isSelected
-                          ? 'text-white/80 hover:text-white'
-                          : 'text-slate-400 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
-                      }`}
-                      title="Drag tab forward or backward to reorder"
-                      aria-label={`Drag to reorder ${cat.name}`}
-                    >
-                      <GripVertical className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100 transition-opacity" />
-                    </div>
-
-                    {/* Category Filter Selection Button */}
-                    <button
-                      type="button"
-                      id={`filter-category-${cat.slug}-btn`}
-                      onClick={() => setSelectedCategory(cat.slug)}
-                      className="flex items-center gap-1.5 pr-2 py-2 text-xs font-semibold whitespace-nowrap cursor-pointer select-none"
-                    >
-                      <CategoryIcon
-                        name={cat.icon}
-                        color={isSelected ? '#ffffff' : cat.color}
-                        className="w-3.5 h-3.5"
-                      />
-                      <span>{cat.name}</span>
-                      {cat.hideFromAll && (
-                        <span
-                          title="Private category (hidden from All Links)"
-                          className={`p-0.5 rounded ${
-                            isSelected ? 'bg-black/20 text-white' : 'text-blue-600 dark:text-cyan-400 bg-blue-50 dark:bg-blue-950/60'
-                          }`}
-                        >
-                          <EyeOff className="w-3 h-3" />
-                        </span>
-                      )}
-                      <span
-                        className={`px-1.5 py-0.5 rounded-full text-[10px] ${
-                          isSelected
-                            ? 'bg-black/20 text-white'
-                            : 'bg-slate-100 dark:bg-[#111B2E] text-slate-600 dark:text-slate-300'
-                        }`}
-                      >
-                        {count}
-                      </span>
-                    </button>
-
-                    {/* Edit Category Button - Always clearly visible in night mode */}
-                    <button
-                      type="button"
-                      id={`edit-category-pill-${cat.slug}-btn`}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingCategory(cat);
-                        setIsCategoryModalOpen(true);
-                      }}
-                      className={`p-1.5 mr-1 rounded-lg transition-all cursor-pointer ${
-                        isSelected
-                          ? 'text-white bg-black/25 hover:bg-black/40 border border-white/25 shadow-2xs'
-                          : 'text-slate-600 dark:text-slate-200 bg-slate-100 dark:bg-slate-800/90 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/90 dark:border-slate-700/80 hover:text-blue-600 dark:hover:text-cyan-300 shadow-2xs'
-                      }`}
-                      title={`Edit ${cat.name} name, icon, color & privacy`}
-                      aria-label={`Edit ${cat.name}`}
-                    >
-                      <Pencil className="w-3.5 h-3.5 text-slate-400 dark:text-slate-200" />
-                    </button>
-
-                    {/* Share Category via QR Code - Always clearly visible in night mode */}
-                    <button
-                      type="button"
-                      id={`share-category-qr-${cat.slug}-btn`}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenQrShareForCategory(cat);
-                      }}
-                      className={`p-1.5 mr-1 rounded-lg transition-all cursor-pointer ${
-                        isSelected
-                          ? 'text-white bg-black/25 hover:bg-black/40 border border-white/25 shadow-2xs'
-                          : 'text-slate-600 dark:text-slate-200 bg-slate-100 dark:bg-slate-800/90 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200/90 dark:border-slate-700/80 hover:text-emerald-600 dark:hover:text-emerald-400 shadow-2xs'
-                      }`}
-                      title={`Share ${cat.name} (${count} links) via QR Code`}
-                      aria-label={`Share ${cat.name} QR Code`}
-                    >
-                      <QrCode className="w-3.5 h-3.5 text-slate-400 dark:text-slate-200" />
-                    </button>
-
-                    {/* Delete Category Button - Security Gated by PIN + Security Question */}
-                    <button
-                      type="button"
-                      id={`delete-category-pill-${cat.slug}-btn`}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRequestDeleteCategory(cat);
-                      }}
-                      className={`p-1.5 mr-1.5 rounded-lg transition-all cursor-pointer ${
-                        isSelected
-                          ? 'text-white bg-black/25 hover:bg-black/40 border border-white/25 shadow-2xs hover:text-rose-200'
-                          : 'text-slate-600 dark:text-slate-200 bg-slate-100 dark:bg-slate-800/90 hover:bg-rose-50 dark:hover:bg-rose-950/40 border border-slate-200/90 dark:border-slate-700/80 hover:text-rose-600 dark:hover:text-rose-400 shadow-2xs'
-                      }`}
-                      title={`Delete "${cat.name}" category (Requires App Lock PIN + Forgot Password Security Answer)`}
-                      aria-label={`Delete ${cat.name}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-slate-400 dark:text-slate-200" />
-                    </button>
-                  </Reorder.Item>
+                    onShareCategory={handleOpenQrShareForCategory}
+                    onRequestDeleteCategory={handleRequestDeleteCategory}
+                  />
                 );
               })}
             </Reorder.Group>
@@ -1716,157 +1814,188 @@ export default function App() {
         </section>
 
         {/* Private Category Info Banner */}
-        {selectedCategory !== 'all' && selectedCategory !== 'favorites' && categoryMap.get(selectedCategory)?.hideFromAll && (
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-xl bg-blue-50/80 dark:bg-[#0D1422] border border-blue-200/80 dark:border-blue-900/40 text-xs text-blue-950 dark:text-blue-100 shadow-2xs">
-            <div className="flex items-start sm:items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-blue-600 dark:bg-cyan-600 text-white flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
-                <EyeOff className="w-4 h-4" />
-              </div>
-              <div>
-                <div className="font-bold flex items-center gap-2 flex-wrap">
-                  <span>Private Category: {categoryMap.get(selectedCategory)?.name}</span>
-                  <span className="text-[10px] bg-blue-200/70 dark:bg-blue-900/60 text-blue-900 dark:text-cyan-200 px-1.5 py-0.5 rounded font-semibold">
-                    Hidden from All Links
-                  </span>
-                </div>
-                <p className="text-[11px] text-blue-700/90 dark:text-blue-300/80 mt-0.5">
-                  Links saved in this category are private and will not appear on the &quot;All Links&quot; page.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-              <button
-                type="button"
-                id="share-category-qr-banner-btn"
-                onClick={() => {
-                  const cat = categoryMap.get(selectedCategory);
-                  if (cat) handleOpenQrShareForCategory(cat);
-                }}
-                className="px-2.5 py-1.5 bg-white dark:bg-[#111B2E] hover:bg-blue-50 dark:hover:bg-[#162238] border border-blue-200 dark:border-blue-800/70 rounded-lg text-blue-700 dark:text-cyan-300 font-semibold transition-colors text-xs inline-flex items-center gap-1.5"
-                title="Generate QR code to share this category and all its links"
-              >
-                <QrCode className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400 shrink-0" />
-                <span>Share QR</span>
-              </button>
-
-              <button
-                type="button"
-                id="toggle-category-privacy-banner-btn"
-                onClick={() => handleToggleCategoryPrivacy(selectedCategory)}
-                className="px-2.5 py-1.5 bg-white dark:bg-[#111B2E] hover:bg-blue-50 dark:hover:bg-[#162238] border border-blue-200 dark:border-blue-800/70 rounded-lg text-blue-700 dark:text-cyan-300 font-semibold transition-colors text-xs"
-              >
-                Make Public
-              </button>
-              <button
-                type="button"
-                id="edit-category-settings-banner-btn"
-                onClick={() => {
-                  const cat = categoryMap.get(selectedCategory);
-                  if (cat) {
-                    setEditingCategory(cat);
-                    setIsCategoryModalOpen(true);
-                  }
-                }}
-                className="px-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white rounded-lg font-semibold transition-colors text-xs inline-flex items-center gap-1.5 shadow-2xs"
-              >
-                <Settings2 className="w-3.5 h-3.5 shrink-0" />
-                <span>Edit</span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Links Grid or List */}
-        <section id="links-container" className="flex-1">
-          {filteredLinks.length === 0 ? (
-            /* Empty State */
-            <div
-              id="empty-links-state"
-              className="py-16 px-4 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-[#0D1422]/50 flex flex-col items-center justify-center max-w-lg mx-auto my-8"
+        <AnimatePresence mode="wait">
+          {selectedCategory !== 'all' && selectedCategory !== 'favorites' && categoryMap.get(selectedCategory)?.hideFromAll && (
+            <motion.div
+              key={`private-banner-${selectedCategory}`}
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+              className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 rounded-xl bg-blue-50/80 dark:bg-[#0D1422] border border-blue-200/80 dark:border-blue-900/40 text-xs text-blue-950 dark:text-blue-100 shadow-2xs"
             >
-              <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-cyan-400 flex items-center justify-center mb-3">
-                <Bookmark className="w-6 h-6" />
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-blue-600 dark:bg-cyan-600 text-white flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                  <EyeOff className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold flex items-center gap-2 flex-wrap">
+                    <span>Private Category: {categoryMap.get(selectedCategory)?.name}</span>
+                    <span className="text-[10px] bg-blue-200/70 dark:bg-blue-900/60 text-blue-900 dark:text-cyan-200 px-1.5 py-0.5 rounded font-semibold">
+                      Hidden from All Links
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-blue-700/90 dark:text-blue-300/80 mt-0.5">
+                    Links saved in this category are private and will not appear on the &quot;All Links&quot; page.
+                  </p>
+                </div>
               </div>
-              <h3 className="text-base font-bold text-[#0F172A] dark:text-[#F1F5F9] font-display">
-                {searchQuery || selectedTag || selectedCategory !== 'all'
-                  ? 'No matching links found'
-                  : 'Your link vault is empty'}
-              </h3>
-              <p className="text-xs text-[#64748B] dark:text-[#94A3B8] mt-1 max-w-sm">
-                {searchQuery || selectedTag || selectedCategory !== 'all'
-                  ? 'Try clearing the search query or selecting a different category filter.'
-                  : 'Start saving your favorite entertainment, study, and informational URLs with live cloud synchronization.'}
-              </p>
-              <div className="mt-5 flex gap-2">
-                {searchQuery || selectedTag || selectedCategory !== 'all' ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('');
-                      setSelectedTag(null);
-                      setSelectedCategory('all');
-                    }}
-                    className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-[#0D1422] border border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-[#111B2E] transition-colors"
-                  >
-                    Reset Filters
-                  </button>
-                ) : null}
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                 <button
                   type="button"
+                  id="share-category-qr-banner-btn"
                   onClick={() => {
-                    setEditingLink(null);
-                    setIsAddModalOpen(true);
+                    const cat = categoryMap.get(selectedCategory);
+                    if (cat) handleOpenQrShareForCategory(cat);
                   }}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                  className="px-2.5 py-1.5 bg-white dark:bg-[#111B2E] hover:bg-blue-50 dark:hover:bg-[#162238] border border-blue-200 dark:border-blue-800/70 rounded-lg text-blue-700 dark:text-cyan-300 font-semibold transition-colors text-xs inline-flex items-center gap-1.5"
+                  title="Generate QR code to share this category and all its links"
                 >
-                  <Plus className="w-4 h-4" />
-                  <span>Add First Link</span>
+                  <QrCode className="w-3.5 h-3.5 text-blue-600 dark:text-cyan-400 shrink-0" />
+                  <span>Share QR</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="toggle-category-privacy-banner-btn"
+                  onClick={() => handleToggleCategoryPrivacy(selectedCategory)}
+                  className="px-2.5 py-1.5 bg-white dark:bg-[#111B2E] hover:bg-blue-50 dark:hover:bg-[#162238] border border-blue-200 dark:border-blue-800/70 rounded-lg text-blue-700 dark:text-cyan-300 font-semibold transition-colors text-xs"
+                >
+                  Make Public
+                </button>
+                <button
+                  type="button"
+                  id="edit-category-settings-banner-btn"
+                  onClick={() => {
+                    const cat = categoryMap.get(selectedCategory);
+                    if (cat) {
+                      setEditingCategory(cat);
+                      setIsCategoryModalOpen(true);
+                    }
+                  }}
+                  className="px-2.5 py-1.5 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white rounded-lg font-semibold transition-colors text-xs inline-flex items-center gap-1.5 shadow-2xs"
+                >
+                  <Settings2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>Edit</span>
                 </button>
               </div>
-            </div>
-          ) : viewMode === 'grid' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredLinks.map((link) => (
-                <LinkCard
-                  key={link.id}
-                  link={link}
-                  category={categoryMap.get(link.categorySlug)}
-                  viewMode="grid"
-                  onOpen={handleOpenLink}
-                  onOpenOptions={handleOpenLaunchOptions}
-                  onShareQr={handleOpenQrShareForLink}
-                  onEdit={(l) => {
-                    setEditingLink(l);
-                    setIsAddModalOpen(true);
-                  }}
-                  onDelete={(id) => setDeleteConfirmationId(id)}
-                  onToggleFavorite={handleToggleFavorite}
-                  onSelectTag={(t) => setSelectedTag(t)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2.5">
-              {filteredLinks.map((link) => (
-                <LinkCard
-                  key={link.id}
-                  link={link}
-                  category={categoryMap.get(link.categorySlug)}
-                  viewMode="list"
-                  onOpen={handleOpenLink}
-                  onOpenOptions={handleOpenLaunchOptions}
-                  onShareQr={handleOpenQrShareForLink}
-                  onEdit={(l) => {
-                    setEditingLink(l);
-                    setIsAddModalOpen(true);
-                  }}
-                  onDelete={(id) => setDeleteConfirmationId(id)}
-                  onToggleFavorite={handleToggleFavorite}
-                  onSelectTag={(t) => setSelectedTag(t)}
-                />
-              ))}
-            </div>
+            </motion.div>
           )}
+        </AnimatePresence>
+
+        {/* Links Grid or List with Subtle Directional Slide-in Animation */}
+        <section id="links-container" className="flex-1 min-h-[300px] overflow-x-hidden">
+          <AnimatePresence mode="wait" custom={slideDirection}>
+            <motion.div
+              key={selectedCategory}
+              custom={slideDirection}
+              variants={linksContainerVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              className="w-full"
+            >
+              {filteredLinks.length === 0 ? (
+                /* Empty State */
+                <div
+                  id="empty-links-state"
+                  className="py-16 px-4 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-800 bg-white/50 dark:bg-[#0D1422]/50 flex flex-col items-center justify-center max-w-lg mx-auto my-8"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-cyan-400 flex items-center justify-center mb-3">
+                    <Bookmark className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-base font-bold text-[#0F172A] dark:text-[#F1F5F9] font-display">
+                    {searchQuery || selectedTag || selectedCategory !== 'all'
+                      ? 'No matching links found'
+                      : 'Your link vault is empty'}
+                  </h3>
+                  <p className="text-xs text-[#64748B] dark:text-[#94A3B8] mt-1 max-w-sm">
+                    {searchQuery || selectedTag || selectedCategory !== 'all'
+                      ? 'Try clearing the search query or selecting a different category filter.'
+                      : 'Start saving your favorite entertainment, study, and informational URLs with live cloud synchronization.'}
+                  </p>
+                  <div className="mt-5 flex gap-2">
+                    {searchQuery || selectedTag || selectedCategory !== 'all' ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchQuery('');
+                          setSelectedTag(null);
+                          setSelectedCategory('all');
+                        }}
+                        className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-[#0D1422] border border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-[#111B2E] transition-colors"
+                      >
+                        Reset Filters
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      id="empty-state-bulk-import-btn"
+                      onClick={() => setIsBulkImportModalOpen(true)}
+                      className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-white dark:bg-[#0D1422] border border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-[#111B2E] transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
+                      <span>Import JSON / CSV</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="empty-state-add-first-link-btn"
+                      onClick={() => {
+                        setEditingLink(null);
+                        setIsAddModalOpen(true);
+                      }}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add First Link</span>
+                    </button>
+                  </div>
+                </div>
+              ) : viewMode === 'grid' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredLinks.map((link) => (
+                    <LinkCard
+                      key={link.id}
+                      link={link}
+                      category={categoryMap.get(link.categorySlug)}
+                      viewMode="grid"
+                      onOpen={handleOpenLink}
+                      onOpenOptions={handleOpenLaunchOptions}
+                      onShareQr={handleOpenQrShareForLink}
+                      onEdit={(l) => {
+                        setEditingLink(l);
+                        setIsAddModalOpen(true);
+                      }}
+                      onDelete={(id) => setDeleteConfirmationId(id)}
+                      onToggleFavorite={handleToggleFavorite}
+                      onSelectTag={(t) => setSelectedTag(t)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  {filteredLinks.map((link) => (
+                    <LinkCard
+                      key={link.id}
+                      link={link}
+                      category={categoryMap.get(link.categorySlug)}
+                      viewMode="list"
+                      onOpen={handleOpenLink}
+                      onOpenOptions={handleOpenLaunchOptions}
+                      onShareQr={handleOpenQrShareForLink}
+                      onEdit={(l) => {
+                        setEditingLink(l);
+                        setIsAddModalOpen(true);
+                      }}
+                      onDelete={(id) => setDeleteConfirmationId(id)}
+                      onToggleFavorite={handleToggleFavorite}
+                      onSelectTag={(t) => setSelectedTag(t)}
+                    />
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          </AnimatePresence>
         </section>
 
         {/* Multi-Device Cloud Sync Banner */}
@@ -1978,6 +2107,7 @@ export default function App() {
         onSave={handleSaveLink}
         editingLink={editingLink}
         categories={categories}
+        existingLinks={links}
         initialCategorySlug={
           selectedCategory !== 'all' && selectedCategory !== 'favorites'
             ? selectedCategory
@@ -2041,6 +2171,7 @@ export default function App() {
         onLockNow={handleLockVault}
         onChangePin={handleChangePin}
         onRemovePin={handleResetPin}
+        onOpenBulkImport={() => setIsBulkImportModalOpen(true)}
       />
 
       {/* 6-Digit PIN Security Lock Screen */}
@@ -2114,12 +2245,23 @@ export default function App() {
         isOpen={isImportModalOpen}
         payload={importPayload}
         existingCategories={categories}
+        existingLinks={links}
         onClose={() => {
           setIsImportModalOpen(false);
           setImportPayload(null);
         }}
         onImportCategoryAndLinks={handleImportCategoryAndLinks}
         onImportSingleLink={handleImportSingleLink}
+      />
+
+      {/* Dedicated Bulk Import (JSON / CSV) Modal */}
+      <BulkImportModal
+        isOpen={isBulkImportModalOpen}
+        onClose={() => setIsBulkImportModalOpen(false)}
+        existingCategories={categories}
+        existingLinks={links}
+        currentCategorySlug={selectedCategory}
+        onConfirmImport={handleConfirmBulkImport}
       />
 
       {/* Floating Import Confirmation Toast */}

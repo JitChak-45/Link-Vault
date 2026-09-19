@@ -22,7 +22,9 @@ import {
   Sparkles,
   Fingerprint,
   ExternalLink,
+  FileDown,
 } from 'lucide-react';
+import { exportLinksToPdf } from '../utils/pdfExport';
 import {
   auth,
   googleProvider,
@@ -58,6 +60,7 @@ interface SyncModalProps {
   onLockNow: () => void;
   onChangePin: () => void;
   onRemovePin?: () => Promise<void>;
+  onOpenBulkImport?: () => void;
 }
 
 export const SyncModal: React.FC<SyncModalProps> = ({
@@ -74,6 +77,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({
   onLockNow,
   onChangePin,
   onRemovePin,
+  onOpenBulkImport,
 }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -187,6 +191,18 @@ export const SyncModal: React.FC<SyncModalProps> = ({
       setAuthError(null);
       await signInWithPopup(auth, googleProvider);
     } catch (err: any) {
+      if (
+        err?.code === 'auth/popup-closed-by-user' ||
+        err?.code === 'auth/cancelled-popup-request'
+      ) {
+        // User closed or dismissed popup - normal cancellation
+        return;
+      }
+      if (err?.code === 'auth/popup-blocked') {
+        setAuthError('Popup was blocked by your browser. Please allow popups or use email sign in.');
+        return;
+      }
+      console.warn('Google Sign In:', err?.message || err);
       setAuthError(err.message || 'Google sign-in failed');
     } finally {
       setAuthLoading(false);
@@ -879,11 +895,50 @@ export const SyncModal: React.FC<SyncModalProps> = ({
                 {importStatus}
               </div>
             )}
-            <div className="flex items-center gap-2">
+            {/* Bulk Import Wizard Button */}
+            {onOpenBulkImport && (
+              <button
+                type="button"
+                id="open-bulk-import-from-sync-btn"
+                onClick={() => {
+                  onClose();
+                  onOpenBulkImport();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-blue-950/40 dark:to-cyan-950/40 hover:from-blue-100 hover:to-cyan-100 dark:hover:from-blue-900/50 dark:hover:to-cyan-900/50 border border-blue-200/80 dark:border-blue-900/60 text-blue-700 dark:text-cyan-300 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Open Bulk Import Wizard (JSON / CSV / Bookmarks)</span>
+              </button>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                id="export-links-pdf-btn"
+                type="button"
+                onClick={() => {
+                  if (links.length === 0) {
+                    setImportStatus('No links to export');
+                    setTimeout(() => setImportStatus(null), 3000);
+                    return;
+                  }
+                  const res = exportLinksToPdf(links, categories);
+                  if (res.success) {
+                    setImportStatus(`Exported ${res.count} links to PDF!`);
+                  } else {
+                    setImportStatus(`Export failed: ${res.error}`);
+                  }
+                  setTimeout(() => setImportStatus(null), 4000);
+                }}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-950/40 hover:bg-blue-100/70 dark:hover:bg-blue-900/50 text-blue-700 dark:text-cyan-300 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                <FileDown className="w-3.5 h-3.5" />
+                <span>Export PDF</span>
+              </button>
+
               <button
                 id="export-links-json-btn"
                 onClick={handleExportJson}
-                className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
                 <span>Export JSON</span>
@@ -891,7 +946,7 @@ export const SyncModal: React.FC<SyncModalProps> = ({
 
               <label
                 id="import-links-json-label"
-                className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer"
               >
                 <Upload className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
                 <span>Import JSON</span>

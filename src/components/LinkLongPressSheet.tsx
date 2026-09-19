@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ExternalLink,
   Copy,
@@ -56,12 +57,43 @@ export const LinkLongPressSheet: React.FC<LinkLongPressSheetProps> = ({
   onEdit,
   onDelete,
 }) => {
-  if (!isOpen) return null;
+  // Guard against synthetic click on touch release immediately closing the sheet
+  const openedAtRef = React.useRef(Date.now());
+  useEffect(() => {
+    if (isOpen) {
+      openedAtRef.current = Date.now();
+    }
+  }, [isOpen]);
 
-  return (
+  const handleBackdropClick = (e: React.MouseEvent) => {
+    if (Date.now() - openedAtRef.current < 450) {
+      return;
+    }
+    onClose();
+  };
+
+  // Lock body scroll while sheet is open
+  useEffect(() => {
+    if (!isOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200 select-none"
-      onClick={onClose}
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200 select-none"
+      onClick={handleBackdropClick}
+      onTouchEnd={(e) => {
+        if (Date.now() - openedAtRef.current < 450) {
+          e.stopPropagation();
+        }
+      }}
     >
       {/* Backdrop */}
       <div
@@ -74,6 +106,7 @@ export const LinkLongPressSheet: React.FC<LinkLongPressSheetProps> = ({
         className="relative w-full sm:max-w-md bg-white dark:bg-[#0D1422] rounded-t-3xl sm:rounded-2xl shadow-2xl border border-slate-200/90 dark:border-slate-800/90 z-10 overflow-hidden max-h-[85vh] flex flex-col animate-in slide-in-from-bottom duration-200"
         onClick={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
+        onTouchEnd={(e) => e.stopPropagation()}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Drag handle for mobile */}
@@ -311,6 +344,7 @@ export const LinkLongPressSheet: React.FC<LinkLongPressSheetProps> = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

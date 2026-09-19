@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   X,
   DownloadCloud,
@@ -12,15 +12,19 @@ import {
   Layers,
   Sparkles,
   ExternalLink,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
 import { Category, SavedLink, QrSharePayload } from '../types';
 import { CategoryIcon } from './CategoryIcon';
-import { extractHostname, getFaviconUrl } from '../utils/urlHelper';
+import { extractHostname, getFaviconUrl, isSameUrl } from '../utils/urlHelper';
+import { isLinkInCategory } from '../utils/qrHelper';
 
 interface ImportSharedModalProps {
   isOpen: boolean;
   payload: QrSharePayload | null;
   existingCategories: Category[];
+  existingLinks?: SavedLink[];
   onClose: () => void;
   onImportCategoryAndLinks: (
     categoryData: {
@@ -57,6 +61,7 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
   isOpen,
   payload,
   existingCategories,
+  existingLinks,
   onClose,
   onImportCategoryAndLinks,
   onImportSingleLink,
@@ -88,6 +93,37 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
     }
     return existingCategories[0]?.slug || 'entertainment';
   });
+
+  const targetCategoryObj = useMemo(() => {
+    return (
+      existingCategories.find((c) => c.slug === targetCategorySlug) || {
+        slug: targetCategorySlug,
+        name: targetCategorySlug,
+      }
+    );
+  }, [existingCategories, targetCategorySlug]);
+
+  // Check if incoming single link already exists in target category
+  const isDuplicateSingleLink = useMemo(() => {
+    if (payload?.type !== 'link' || !existingLinks) return null;
+    return (
+      existingLinks.find(
+        (l) =>
+          isLinkInCategory(l.categorySlug, targetCategoryObj) &&
+          isSameUrl(l.url, payload.link.url)
+      ) || null
+    );
+  }, [payload, targetCategoryObj, existingLinks]);
+
+  // Check if incoming single link exists in any other category
+  const existingInOtherCategories = useMemo(() => {
+    if (payload?.type !== 'link' || !existingLinks) return [];
+    return existingLinks.filter(
+      (l) =>
+        !isLinkInCategory(l.categorySlug, targetCategoryObj) &&
+        isSameUrl(l.url, payload.link.url)
+    );
+  }, [payload, targetCategoryObj, existingLinks]);
 
   // Re-sync privacy flag when payload or modal visibility changes
   React.useEffect(() => {
@@ -365,12 +401,72 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
                   onChange={(e) => setTargetCategorySlug(e.target.value)}
                   className="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-medium text-slate-800 dark:text-slate-200 bg-white dark:bg-[#070B14] focus:outline-hidden focus:border-blue-600 dark:focus:border-cyan-400"
                 >
-                  {existingCategories.map((c) => (
-                    <option key={c.slug} value={c.slug} className="bg-white dark:bg-[#0D1422] text-slate-900 dark:text-slate-100">
-                      {c.name} {c.hideFromAll ? '(Private)' : ''}
-                    </option>
-                  ))}
+                  {existingCategories.map((c) => {
+                    const alreadyHasLink =
+                      payload?.type === 'link' &&
+                      existingLinks?.some(
+                        (l) =>
+                          isLinkInCategory(l.categorySlug, c) &&
+                          isSameUrl(l.url, payload.link.url)
+                      );
+                    return (
+                      <option
+                        key={c.slug}
+                        value={c.slug}
+                        className="bg-white dark:bg-[#0D1422] text-slate-900 dark:text-slate-100"
+                      >
+                        {c.name} {c.hideFromAll ? '(Private)' : ''}{' '}
+                        {alreadyHasLink ? '(Already contains link)' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
+
+                {/* Duplicate single link warning */}
+                {isDuplicateSingleLink && (
+                  <div
+                    id="import-duplicate-link-warning"
+                    className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-xs space-y-1 animate-in fade-in"
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-200">
+                      <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                      <span>Already in "{targetCategoryObj.name}"</span>
+                    </div>
+                    <p className="text-xs text-amber-800 dark:text-amber-300">
+                      This link already exists in{' '}
+                      <strong className="font-semibold">{targetCategoryObj.name}</strong> as "
+                      {isDuplicateSingleLink.title}". Duplicate entries in the same category are
+                      not allowed.
+                    </p>
+                    <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                      💡 Tip: Please select a different category above to import it.
+                    </p>
+                  </div>
+                )}
+
+                {/* Cross-category allowed message */}
+                {!isDuplicateSingleLink && existingInOtherCategories.length > 0 && (
+                  <div
+                    id="import-cross-category-notice"
+                    className="p-2.5 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300 text-[11px] flex items-center gap-2 animate-in fade-in"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <span>
+                      This link is already in{' '}
+                      <strong className="font-semibold">
+                        {existingInOtherCategories
+                          .map(
+                            (l) =>
+                              existingCategories.find((c) =>
+                                isLinkInCategory(l.categorySlug, c)
+                              )?.name || l.categorySlug
+                          )
+                          .join(', ')}
+                      </strong>
+                      . Adding to <strong className="font-semibold">{targetCategoryObj.name}</strong> is permitted!
+                    </span>
+                  </div>
+                )}
               </div>
             </>
           ) : null}
@@ -390,8 +486,11 @@ export const ImportSharedModal: React.FC<ImportSharedModalProps> = ({
             type="button"
             id="confirm-import-shared-btn"
             onClick={handleConfirmImport}
-            disabled={isCategory && categoryLinks.length > 0 && selectedIndices.length === 0}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
+            disabled={
+              (isCategory && categoryLinks.length > 0 && selectedIndices.length === 0) ||
+              (!isCategory && !!isDuplicateSingleLink)
+            }
+            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 disabled:opacity-50 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
           >
             <DownloadCloud className="w-4 h-4" />
             <span>
